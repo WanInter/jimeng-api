@@ -4,13 +4,7 @@
 
 🎨 **Free AI Image and Video Generation API Service** - Based on reverse engineering of Jimeng AI (China site) and Dreamina (international site).
 
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Docker](https://img.shields.io/badge/Docker-Supported-blue.svg)](https://www.docker.com/) [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![Telegram](https://img.shields.io/badge/Telegram-Group-blue.svg?logo=telegram)](https://t.me/jimeng_api)
-
-> ⭐ **If this project helps you, please give it a Star!** Your support motivates us to keep improving.
->
-> 🔔 **Watch this project** to get notified about new features and updates.
->
-> 💬 **Join our Telegram group**: [https://t.me/jimeng_api](https://t.me/jimeng_api) — For questions, feedback, and discussion.
+[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Docker](https://img.shields.io/badge/Docker-Supported-blue.svg)](https://www.docker.com/) [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 
 ## ✨ Features
 
@@ -18,15 +12,15 @@
 - 🖼️ **Image-to-Image Synthesis**: Supports local images or image URLs.
 - 🎬 **AI Video Generation**: Supports text-to-video generation, and adds local image upload for image-to-video on the China site.
 - 🌐 **International Site Support**: Added support for text-to-image and image-to-image APIs on Dreamina international sites. Open an issue if you run into problems.
+- 💬 **Chat Completions API**: OpenAI-compatible `/v1/chat/completions` endpoint, automatically dispatching image/video models.
+- 🖥️ **Management Dashboard**: Built-in web admin (SQLite-backed) for account management, API Key management, statistics, real-time logs, and media library.
+- 📐 **Intelligent Ratio Detection**: Automatically infers the optimal aspect ratio from the prompt.
+- ⬇️ **Auto Downgrade**: Automatically falls back to a lower resolution / shorter duration when credits are insufficient.
 - 🔄 **Smart Polling**: Adaptive polling mechanism to optimize generation efficiency.
 - 🛡️ **Unified Exception Handling**: Comprehensive error handling and retry mechanism.
 - 📊 **Detailed Logs**: Structured logging for easy debugging.
 - 🐳 **Docker Support**: Containerized deployment, ready to use out of the box.
 - ⚙️ **Log Level Control**: Dynamically adjust log output level through configuration files.
-
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=iptag/jimeng-api&type=Date)](https://star-history.com/#iptag/jimeng-api&Date)
 
 ## ⚠ Risk Warning
 
@@ -72,7 +66,7 @@ curl -X POST http://localhost:5100/v1/images/generations \
 > - **US site (us-)**: Images are fixed at **1024x1024** with **2k** resolution, ignoring user-provided ratio and resolution parameters
 > - **Hong Kong/Japan/Singapore sites (hk-/jp-/sg-)**: Fixed **1k** resolution, but supports custom `ratio` values (e.g., 16:9, 4:3, etc.)
 
-![](https://github.com/iptag/jimeng-api/blob/main/get_sessionid.png)
+![](get_sessionid.png)
 
 ### Environment Requirements
 
@@ -90,7 +84,7 @@ docker run -d \
   --name jimeng-api \
   -p 5100:5100 \
   --restart unless-stopped \
-  ghcr.io/iptag/jimeng-api:latest
+  ghcr.io/icysaintdx/jimeng-api:latest
 ```
 
 **Update command**
@@ -173,6 +167,19 @@ debug: false
 log_level: info # Log levels: error, warning, info (default), debug
 ```
 
+## 🖥️ Management Dashboard
+
+A built-in web admin (backed by SQLite) is served at the root path. After the service starts, open `http://localhost:5100/` in your browser.
+
+- **First-time setup**: On first visit you will be prompted to create an admin account (username + password).
+- **Account Management**: Add / check / delete Jimeng accounts (sessionid), with automatic region-prefix handling (us-/hk-/jp-/sg-).
+- **API Key Management**: Generate, enable/disable, and delete API Keys.
+- **Statistics**: View call counts and per-key usage.
+- **Real-time Logs**: Inspect and clear runtime logs by level.
+- **Media Library**: Browse generated images and videos with pagination.
+
+> The dashboard data (admin credentials, sessions, API keys) is stored in the local `data/` directory, which is excluded from version control.
+
 ## 🤖 Claude Code Skill
 
 This project includes a dedicated Claude Code Skill for quick image generation using the Jimeng API directly within Claude Code conversations.
@@ -192,7 +199,7 @@ This project includes a dedicated Claude Code Skill for quick image generation u
 # Start the service with Docker
 docker-compose up -d
 # or
-docker run -d --name jimeng-api -p 5100:5100 ghcr.io/iptag/jimeng-api:latest
+docker run -d --name jimeng-api -p 5100:5100 ghcr.io/icysaintdx/jimeng-api:latest
 ```
 
 2. **Copy the skill to Claude Code's skills directory**:
@@ -812,11 +819,11 @@ export const RETRY_CONFIG = {
     -   Go to the Jimeng/Dreamina official website to check your credit balance.
     -   The API returns detailed credit info.
 
-## 🙏 Acknowledgements
+## 🙏 References
 
-This project is based on the contributions and inspiration of the following open-source project:
+This project references and builds upon the following open-source projects:
 
-- **[jimeng-free-api-all](https://github.com/wwwzhouhui/jimeng-free-api-all)** - Thanks to this project for providing an important reference and technical basis for the reverse engineering of the Jimeng API. This project has improved its functionality and architecture based on it.
+- [jimeng-free-api-all](https://github.com/wwwzhouhui/jimeng-free-api-all) — Reference for the reverse-engineering approach of the Jimeng API.
 
 ## 📄 License
 

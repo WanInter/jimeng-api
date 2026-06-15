@@ -1,14 +1,10 @@
 # Jimeng API
 
+[English](README.md)
+
 🎨 **免费的AI图像和视频生成API服务** - 基于即梦AI（国内站）和dreamina（国际站）的逆向工程实现。
 
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Docker](https://img.shields.io/badge/Docker-支持-blue.svg)](https://www.docker.com/) [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![Telegram](https://img.shields.io/badge/Telegram-群组-blue.svg?logo=telegram)](https://t.me/jimeng_api)
-
-> ⭐ **如果这个项目对你有帮助，请给个 Star 支持一下！** 你的支持是我们持续更新的动力。
->
-> 🔔 **Watch 本项目**以获取最新功能更新通知。
->
-> 💬 **加入 Telegram 交流群**: [https://t.me/jimeng_api](https://t.me/jimeng_api) — 问题反馈、使用交流、功能讨论。
+[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/) [![Docker](https://img.shields.io/badge/Docker-支持-blue.svg)](https://www.docker.com/) [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 
 ## ✨ 特性
 
@@ -16,15 +12,15 @@
 - 🖼️ **图生图合成**: 支持本地图片或者图片URL
 - 🎬 **AI视频生成**: 支持文本到视频生成，增加国内站图生视频的本地图片上传功能
 - 🌐 **国际站支持**: 新增对即梦国际站（dreamina）文生图以及图生图API的支持，有问题提issue
+- 💬 **Chat 对话接口**: OpenAI 兼容的 `/v1/chat/completions` 接口，自动判别图像/视频模型
+- 🖥️ **管理后台**: 内置 Web 管理后台（SQLite 存储），支持账号管理、API Key 管理、统计、实时日志、媒体库
+- 📐 **智能比例检测**: 从 prompt 中自动推断最优宽高比
+- ⬇️ **自动降级**: 积分不足时自动回退到更低分辨率/更短时长
 - 🔄 **智能轮询**: 自适应轮询机制，优化生成效率
 - 🛡️ **统一异常处理**: 完善的错误处理和重试机制
 - 📊 **详细日志**: 结构化日志记录，便于调试
 - 🐳 **Docker支持**: 容器化部署，开箱即用
 - ⚙️ **日志级别控制**: 可通过配置文件动态调整日志输出级别
-
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=iptag/jimeng-api&type=Date)](https://star-history.com/#iptag/jimeng-api&Date)
 
 ## ⚠ 风险警告
 
@@ -74,7 +70,7 @@ curl -X POST http://localhost:5100/v1/images/generations \
 > - **美国站 (us-)**: 生成的图像固定为 **1024x1024** 和 **2k** 清晰度，忽略用户传入的 ratio 和 resolution 参数
 > - **香港/日本/新加坡站 (hk-/jp-/sg-)**: 强制使用 **1k** 清晰度，但支持自定义 ratio 参数（如 16:9、4:3 等）
 
-![](https://github.com/iptag/jimeng-api/blob/main/get_sessionid.png)
+![](get_sessionid.png)
 
 ### 环境要求
 
@@ -92,7 +88,7 @@ docker run -d \
   --name jimeng-api \
   -p 5100:5100 \
   --restart unless-stopped \
-  ghcr.io/iptag/jimeng-api:latest
+  ghcr.io/icysaintdx/jimeng-api:latest
 ```
 
 **更新命令**
@@ -175,6 +171,19 @@ debug: false
 log_level: info # 日志级别: error, warning, info(默认), debug
 ```
 
+## 🖥️ 管理后台
+
+服务在根路径内置了 Web 管理后台（基于 SQLite 存储）。服务启动后，在浏览器打开 `http://localhost:5100/` 即可访问。
+
+- **首次初始化**: 首次访问时会提示创建管理员账号（用户名 + 密码）。
+- **账号管理**: 添加 / 检测 / 删除即梦账号（sessionid），自动处理区域前缀（us-/hk-/jp-/sg-）。
+- **API Key 管理**: 生成、启用/禁用、删除 API Key。
+- **统计信息**: 查看调用次数与各 Key 的使用情况。
+- **实时日志**: 按级别查看并清理运行日志。
+- **媒体库**: 分页浏览已生成的图片和视频。
+
+> 后台数据（管理员凭据、会话、API Key）存储在本地 `data/` 目录，已被版本控制排除。
+
 ## 🤖 Claude Code Skill
 
 本项目提供了一个专用的 Claude Code Skill,方便在 Claude Code 中快速调用即梦API生成图片。
@@ -194,7 +203,7 @@ log_level: info # 日志级别: error, warning, info(默认), debug
 # 使用 Docker 启动服务
 docker-compose up -d
 # 或
-docker run -d --name jimeng-api -p 5100:5100 ghcr.io/iptag/jimeng-api:latest
+docker run -d --name jimeng-api -p 5100:5100 ghcr.io/icysaintdx/jimeng-api:latest
 ```
 
 2. **将 skill 复制到 Claude Code 的 skills 目录**:
@@ -844,11 +853,11 @@ export const RETRY_CONFIG = {
    - 前往即梦/dreamina官网查看积分余额
    - 系统会提供详细的积分状态信息
 
-## 🙏 致谢
+## 🙏 参考项目
 
-本项目基于以下开源项目的贡献和启发：
+本项目参考并借鉴了以下开源项目：
 
-- **[jimeng-free-api-all](https://github.com/wwwzhouhui/jimeng-free-api-all)** - 感谢该项目为即梦API逆向工程提供的重要参考和技术基础，本项目在其基础上进行了功能完善和架构优化
+- [jimeng-free-api-all](https://github.com/wwwzhouhui/jimeng-free-api-all) — 即梦 API 逆向工程思路的参考来源。
 
 ## 📄 许可证
 

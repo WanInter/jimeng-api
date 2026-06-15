@@ -35,4 +35,7 @@
 - **修复**: 改为抛出带 `.setHTTPStatusCode(401)` 的 Exception，正确返回 HTTP 401 与错误码 -1003
 - **文件**: `src/api/routes/dashboard.ts` `src/lib/consts/exceptions.ts`
 
+### 📚 文档更新
+- 重写 `README.md` / `README.CN.md`：移除旧仓库与联系信息，仅保留参考项目标注，补充管理后台、Chat 接口等新功能说明，更新镜像地址为 `ghcr.io/icysaintdx/jimeng-api`
+
 ---
