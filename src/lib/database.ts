@@ -356,6 +356,31 @@ export function getRandomAccountToken(): string | null {
   return accounts.length > 0 ? accounts[0].token : null;
 }
 
+/**
+ * 根据 token 精确查找账号（用于匹配 Authorization header 中的 token 与 DB 中的账号）
+ *
+ * @param token session token
+ * @returns 账号信息或 null
+ */
+export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string } | null {
+  // 去掉可能的区域前缀进行匹配，因为 DB 中存储的是完整 token
+  const account = db.prepare(
+    'SELECT id, credits_remaining, status FROM jimeng_accounts WHERE token = ?'
+  ).get(token) as { id: number; credits_remaining: number; status: string } | undefined;
+  return account || null;
+}
+
+/**
+ * 批量获取所有有效账号的 token + 积分（用于负载均衡）
+ *
+ * @returns 账号积分列表
+ */
+export function getAllAccountCredits(): { token: string; credits_remaining: number; status: string }[] {
+  return db.prepare(
+    'SELECT token, credits_remaining, status FROM jimeng_accounts WHERE status != ?'
+  ).all('invalid') as { token: string; credits_remaining: number; status: string }[];
+}
+
 export default {
   isSetupComplete,
   createUser,
@@ -384,5 +409,7 @@ export default {
   incrementApiKeyUsage,
   toggleApiKey,
   deleteApiKey,
-  getRandomAccountToken
+  getRandomAccountToken,
+  getAccountByToken,
+  getAllAccountCredits
 };

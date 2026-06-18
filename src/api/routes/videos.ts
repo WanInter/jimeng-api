@@ -6,6 +6,7 @@ import { tokenSplit } from '@/api/controllers/core.ts';
 import { generateVideo, DEFAULT_MODEL } from '@/api/controllers/videos.ts';
 import util from '@/lib/util.ts';
 import db from '@/lib/database.ts';
+import { selectToken, estimateCredits } from '@/lib/load-balancer.ts';
 
 export default {
 
@@ -139,8 +140,6 @@ export default {
 
             // refresh_token切分
             const tokens = tokenSplit(request.headers.authorization);
-            // 随机挑选一个refresh_token
-            const token = _.sample(tokens);
 
             const {
                 model = DEFAULT_MODEL,
@@ -152,6 +151,10 @@ export default {
                 filePaths = [],
                 response_format = "url"
             } = request.body;
+
+            // 积分感知选择 token
+            const estimatedCost = estimateCredits('video', { model, duration });
+            const token = await selectToken(tokens, estimatedCost, 'highest');
 
             // 如果是 multipart/form-data，需要将字符串转换为数字
             const finalDuration = isMultiPart && typeof duration === 'string'

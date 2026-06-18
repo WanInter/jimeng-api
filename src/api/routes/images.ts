@@ -7,6 +7,7 @@ import { DEFAULT_IMAGE_MODEL } from "@/api/consts/common.ts";
 import { tokenSplit } from "@/api/controllers/core.ts";
 import util from "@/lib/util.ts";
 import db from "@/lib/database.ts";
+import { selectToken, estimateCredits } from "@/lib/load-balancer.ts";
 
 export default {
   prefix: "/v1/images",
@@ -33,7 +34,6 @@ export default {
         .validate("headers.authorization", _.isString);
 
       const tokens = tokenSplit(request.headers.authorization);
-      const token = _.sample(tokens);
       const {
         model,
         prompt,
@@ -45,6 +45,8 @@ export default {
         response_format,
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
+      const estimatedCost = estimateCredits('image', { resolution, count: 4 });
+      const token = await selectToken(tokens, estimatedCost, 'drain-low');
 
       const responseFormat = _.defaultTo(response_format, "url");
       const imageUrls = await generateImages(finalModel, prompt, {
@@ -150,7 +152,6 @@ export default {
       }
 
       const tokens = tokenSplit(request.headers.authorization);
-      const token = _.sample(tokens);
 
       const {
         model,
@@ -163,6 +164,8 @@ export default {
         response_format,
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
+      const estimatedCost = estimateCredits('image', { resolution, count: 1 });
+      const token = await selectToken(tokens, estimatedCost, 'drain-low');
 
       // 如果是 multipart/form-data，需要将字符串转换为数字和布尔值
       const finalSampleStrength = isMultiPart && typeof sampleStrength === 'string'
