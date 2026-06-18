@@ -153,8 +153,8 @@ export default {
             } = request.body;
 
             // 积分感知选择 token
-            const estimatedCost = estimateCredits('video', { model, duration });
-            const token = await selectToken(tokens, estimatedCost, 'highest');
+            const estimatedCost = estimateCredits('video', { model, resolution, duration });
+            const sel = await selectToken(tokens, estimatedCost, 'highest');
 
             // 如果是 multipart/form-data，需要将字符串转换为数字
             const finalDuration = isMultiPart && typeof duration === 'string'
@@ -177,13 +177,13 @@ export default {
                     httpRequest: request, // 传递完整的 request 对象以访问动态字段
                     functionMode,
                 },
-                token
+                sel.proxyToken
             );
 
             // 记录统计和媒体
             try {
-                db.recordCall(token, model, 0);
-                if (generatedVideoUrl) db.saveMedia('video', generatedVideoUrl, model, prompt, token);
+                db.recordCall(sel.token, model, 0);
+                if (generatedVideoUrl) db.saveMedia('video', generatedVideoUrl, model, prompt, sel.token);
             } catch (e) { /* 忽略数据库错误，不影响主流程 */ }
 
             // 根据response_format返回不同格式的结果

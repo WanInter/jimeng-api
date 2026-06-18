@@ -20,20 +20,20 @@ export default {
             const tokens = tokenSplit(request.headers.authorization);
             const { model, messages, stream } = request.body;
 
-            // 积分感知选择 token
+            // 积分感知选择 token（含代理绑定）
             const isVideo = model && model.startsWith('jimeng-video');
             const estimatedCost = isVideo
-              ? estimateCredits('video', { model, duration: 5 })
-              : estimateCredits('image', { resolution: '2k', count: 4 });
-            const token = await selectToken(tokens, estimatedCost, isVideo ? 'highest' : 'drain-low');
+              ? estimateCredits('video', { model })
+              : estimateCredits('image', { model, resolution: '2k' });
+            const sel = await selectToken(tokens, estimatedCost, isVideo ? 'highest' : 'drain-low');
             if (stream) {
-                const stream = await createCompletionStream(messages, token, model);
+                const stream = await createCompletionStream(messages, sel.proxyToken, model);
                 return new Response(stream, {
                     type: "text/event-stream"
                 });
             }
             else
-                return await createCompletion(messages, token, model);
+                return await createCompletion(messages, sel.proxyToken, model);
         }
 
     }

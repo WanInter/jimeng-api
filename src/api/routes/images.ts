@@ -45,8 +45,8 @@ export default {
         response_format,
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
-      const estimatedCost = estimateCredits('image', { resolution, count: 4 });
-      const token = await selectToken(tokens, estimatedCost, 'drain-low');
+      const estimatedCost = estimateCredits('image', { model: finalModel, resolution });
+      const sel = await selectToken(tokens, estimatedCost, 'drain-low');
 
       const responseFormat = _.defaultTo(response_format, "url");
       const imageUrls = await generateImages(finalModel, prompt, {
@@ -55,13 +55,13 @@ export default {
         sampleStrength,
         negativePrompt,
         intelligentRatio,
-      }, token);
+      }, sel.proxyToken);
 
       // 记录统计和媒体
       try {
-        db.recordCall(token, finalModel, 0);
+        db.recordCall(sel.token, finalModel, 0);
         imageUrls.forEach(url => {
-          if (url) db.saveMedia('image', url, finalModel, prompt, token);
+          if (url) db.saveMedia('image', url, finalModel, prompt, sel.token);
         });
       } catch (e) { /* 忽略数据库错误，不影响主流程 */ }
 
@@ -164,8 +164,8 @@ export default {
         response_format,
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
-      const estimatedCost = estimateCredits('image', { resolution, count: 1 });
-      const token = await selectToken(tokens, estimatedCost, 'drain-low');
+      const estimatedCost = estimateCredits('image', { model: finalModel, resolution });
+      const sel = await selectToken(tokens, estimatedCost, 'drain-low');
 
       // 如果是 multipart/form-data，需要将字符串转换为数字和布尔值
       const finalSampleStrength = isMultiPart && typeof sampleStrength === 'string'
@@ -183,13 +183,13 @@ export default {
         sampleStrength: finalSampleStrength,
         negativePrompt,
         intelligentRatio: finalIntelligentRatio,
-      }, token);
+      }, sel.proxyToken);
 
       // 记录统计和媒体
       try {
-        db.recordCall(token, finalModel, 0);
+        db.recordCall(sel.token, finalModel, 0);
         resultUrls.forEach(url => {
-          if (url) db.saveMedia('image', url, finalModel, prompt, token);
+          if (url) db.saveMedia('image', url, finalModel, prompt, sel.token);
         });
       } catch (e) { /* 忽略数据库错误，不影响主流程 */ }
 

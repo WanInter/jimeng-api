@@ -6,6 +6,7 @@ import "@/lib/initialize.ts";
 import server from "@/lib/server.ts";
 import routes from "@/api/routes/index.ts";
 import logger from "@/lib/logger.ts";
+import { initAccountKeeper } from "@/lib/account-keeper.ts";
 
 const startupTime = performance.now();
 
@@ -23,6 +24,9 @@ const startupTime = performance.now();
 
   config.service.bindAddress &&
     logger.success("Service bind address:", config.service.bindAddress);
+
+  // 初始化账号保活定时任务
+  initAccountKeeper();
 })()
   .then(() =>
     logger.success(

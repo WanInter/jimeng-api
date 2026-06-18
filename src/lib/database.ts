@@ -92,12 +92,86 @@ db.exec(`
     FOREIGN KEY (account_id) REFERENCES jimeng_accounts(id)
   );
 
+  -- 积分消耗规则表（可配置，管理后台可编辑）
+  CREATE TABLE IF NOT EXISTS cost_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_type TEXT NOT NULL,          -- 'image' 或 'video'
+    model_pattern TEXT DEFAULT '*',   -- 模型匹配模式，'*' 表示所有模型，'jimeng-4.5' 精确匹配，'seedance' 模糊匹配
+    region TEXT DEFAULT '*',          -- 地区：'*' 所有，'cn'/'us'/'hk'/'jp'/'sg'
+    resolution TEXT DEFAULT '*',      -- 分辨率：'*'/'1k'/'2k'/'4k'/'720p'/'1080p'
+    duration_min INTEGER DEFAULT 0,   -- 视频时长下限（秒），图片为 0
+    duration_max INTEGER DEFAULT 0,   -- 视频时长上限（秒），图片为 0
+    credits_cost INTEGER NOT NULL,    -- 消耗积分数
+    priority INTEGER DEFAULT 0,       -- 优先级（数值越大越优先匹配）
+    description TEXT DEFAULT '',      -- 规则描述
+    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+  );
+
   -- 创建索引
   CREATE INDEX IF NOT EXISTS idx_key_stats_key ON key_stats(key_hash);
   CREATE INDEX IF NOT EXISTS idx_media_created ON media(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
   CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_cost_rules_type ON cost_rules(task_type);
 `);
+
+// 迁移：为已有表添加新字段（如果不存在）
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN proxy_url TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+
+// 初始化默认积分消耗规则（仅在表为空时插入）
+const ruleCount = (db.prepare('SELECT COUNT(*) as c FROM cost_rules').get() as { c: number }).c;
+if (ruleCount === 0) {
+  const insertRule = db.prepare(`
+    INSERT INTO cost_rules (task_type, model_pattern, region, resolution, duration_min, duration_max, credits_cost, priority, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const defaultRules: [string, string, string, string, number, number, number, number, string][] = [
+    // ===== 图片生成 =====
+    // 基础文生图（所有模型，默认4张）
+    ['image', '*', '*', '1k',  0, 0, 3,  10, '图片 1k 基础'],
+    ['image', '*', '*', '2k',  0, 0, 5,  20, '图片 2k 默认'],
+    ['image', '*', '*', '4k',  0, 0, 10, 30, '图片 4k 高清'],
+    // jimeng-5.0 高端模型溢价
+    ['image', 'jimeng-5.0', '*', '2k', 0, 0, 8,  25, 'jimeng-5.0 2k'],
+    ['image', 'jimeng-5.0', '*', '4k', 0, 0, 15, 35, 'jimeng-5.0 4k'],
+
+    // ===== 视频生成（按时长×模型×分辨率） =====
+    // jimeng-video-3.0 标准版
+    ['video', 'jimeng-video-3.0',       '*', '720p',  0, 5,  25,  10, '3.0 5s 720p'],
+    ['video', 'jimeng-video-3.0',       '*', '720p',  6, 10, 45,  10, '3.0 10s 720p'],
+    ['video', 'jimeng-video-3.0',       '*', '1080p', 0, 5,  40,  15, '3.0 5s 1080p'],
+    ['video', 'jimeng-video-3.0',       '*', '1080p', 6, 10, 70,  15, '3.0 10s 1080p'],
+    // jimeng-video-3.0-fast
+    ['video', 'jimeng-video-3.0-fast',  '*', '720p',  0, 5,  20,  10, '3.0-fast 5s'],
+    ['video', 'jimeng-video-3.0-fast',  '*', '720p',  6, 10, 35,  10, '3.0-fast 10s'],
+    // jimeng-video-3.5-pro
+    ['video', 'jimeng-video-3.5-pro',   '*', '*',     0, 5,  40,  20, '3.5-pro 5s'],
+    ['video', 'jimeng-video-3.5-pro',   '*', '*',     6, 10, 70,  20, '3.5-pro 10s'],
+    ['video', 'jimeng-video-3.5-pro',   '*', '*',    11, 15, 100, 20, '3.5-pro 15s'],
+    // seedance-2.0（高端）
+    ['video', 'jimeng-video-seedance-2.0',      '*', '*', 0, 5,  50,  25, 'seedance-2.0 5s'],
+    ['video', 'jimeng-video-seedance-2.0',      '*', '*', 6, 10, 90,  25, 'seedance-2.0 10s'],
+    ['video', 'jimeng-video-seedance-2.0',      '*', '*',11, 15, 130, 25, 'seedance-2.0 15s'],
+    ['video', 'jimeng-video-seedance-2.0-fast', '*', '*', 0, 5,  40,  25, 'seedance-2.0-fast 5s'],
+    ['video', 'jimeng-video-seedance-2.0-fast', '*', '*', 6, 10, 70,  25, 'seedance-2.0-fast 10s'],
+    ['video', 'jimeng-video-seedance-2.0-fast', '*', '*',11, 15, 100, 25, 'seedance-2.0-fast 15s'],
+    // veo3 / veo3.1（国际站高端）
+    ['video', 'jimeng-video-veo3',   '*', '*', 0, 8, 80,  30, 'veo3 8s'],
+    ['video', 'jimeng-video-veo3.1', '*', '*', 0, 8, 80,  30, 'veo3.1 8s'],
+    // sora2
+    ['video', 'jimeng-video-sora2',  '*', '*', 0, 4,  50,  25, 'sora2 4s'],
+    ['video', 'jimeng-video-sora2',  '*', '*', 5, 8,  80,  25, 'sora2 8s'],
+    ['video', 'jimeng-video-sora2',  '*', '*', 9, 12, 120, 25, 'sora2 12s'],
+    // 通用兜底（未匹配到具体规则时）
+    ['video', '*', '*', '*', 0, 5,  30,  1, '视频通用 5s'],
+    ['video', '*', '*', '*', 6, 10, 55,  1, '视频通用 10s'],
+    ['video', '*', '*', '*',11, 15, 80,  1, '视频通用 15s'],
+  ];
+  const insertMany = db.transaction((rules: typeof defaultRules) => {
+    for (const r of rules) insertRule.run(...r);
+  });
+  insertMany(defaultRules);
+}
 
 // 密码哈希
 export function hashPassword(password: string): string {
@@ -278,15 +352,22 @@ export function clearLogs(): void {
 
 // ==================== 即梦账号管理 ====================
 
-export function addAccount(name: string, token: string, region: string = 'cn'): number {
+export function addAccount(name: string, token: string, region: string = 'cn', proxyUrl: string = ''): number {
   const preview = keyPreview(token);
-  const result = db.prepare('INSERT INTO jimeng_accounts (name, token, token_preview, region) VALUES (?, ?, ?, ?)')
-    .run(name, token, preview, region);
+  const result = db.prepare('INSERT INTO jimeng_accounts (name, token, token_preview, region, proxy_url) VALUES (?, ?, ?, ?, ?)')
+    .run(name, token, preview, region, proxyUrl);
   return result.lastInsertRowid as number;
 }
 
 export function getAccounts() {
-  return db.prepare('SELECT id, name, token_preview, region, credits_remaining, credits_total, status, last_check, created_at FROM jimeng_accounts ORDER BY created_at DESC').all();
+  return db.prepare('SELECT id, name, token_preview, region, proxy_url, credits_remaining, credits_total, status, last_check, created_at FROM jimeng_accounts ORDER BY created_at DESC').all();
+}
+
+/**
+ * 获取所有账号的完整 token（用于保活检测）
+ */
+export function getAllAccountTokens() {
+  return db.prepare('SELECT id, name, token, proxy_url, status FROM jimeng_accounts ORDER BY id').all() as { id: number; name: string; token: string; proxy_url: string | null; status: string }[];
 }
 
 export function getAccountById(id: number) {
@@ -311,6 +392,92 @@ export function updateAccountStatus(id: number, status: string): void {
 export function deleteAccount(id: number): void {
   db.prepare('DELETE FROM api_keys WHERE account_id = ?').run(id);
   db.prepare('DELETE FROM jimeng_accounts WHERE id = ?').run(id);
+}
+
+export function updateAccountProxy(id: number, proxyUrl: string): void {
+  db.prepare('UPDATE jimeng_accounts SET proxy_url = ? WHERE id = ?').run(proxyUrl, id);
+}
+
+// ==================== 积分消耗规则管理 ====================
+
+export function getCostRules() {
+  return db.prepare('SELECT * FROM cost_rules ORDER BY task_type, priority DESC, id').all();
+}
+
+export function addCostRule(rule: {
+  task_type: string; model_pattern?: string; region?: string;
+  resolution?: string; duration_min?: number; duration_max?: number;
+  credits_cost: number; priority?: number; description?: string;
+}): number {
+  const result = db.prepare(`
+    INSERT INTO cost_rules (task_type, model_pattern, region, resolution, duration_min, duration_max, credits_cost, priority, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    rule.task_type, rule.model_pattern || '*', rule.region || '*',
+    rule.resolution || '*', rule.duration_min || 0, rule.duration_max || 0,
+    rule.credits_cost, rule.priority || 0, rule.description || ''
+  );
+  return result.lastInsertRowid as number;
+}
+
+export function updateCostRule(id: number, rule: {
+  task_type?: string; model_pattern?: string; region?: string;
+  resolution?: string; duration_min?: number; duration_max?: number;
+  credits_cost?: number; priority?: number; description?: string;
+}): void {
+  const existing = db.prepare('SELECT * FROM cost_rules WHERE id = ?').get(id) as any;
+  if (!existing) return;
+  db.prepare(`
+    UPDATE cost_rules SET task_type=?, model_pattern=?, region=?, resolution=?,
+    duration_min=?, duration_max=?, credits_cost=?, priority=?, description=? WHERE id=?
+  `).run(
+    rule.task_type ?? existing.task_type, rule.model_pattern ?? existing.model_pattern,
+    rule.region ?? existing.region, rule.resolution ?? existing.resolution,
+    rule.duration_min ?? existing.duration_min, rule.duration_max ?? existing.duration_max,
+    rule.credits_cost ?? existing.credits_cost, rule.priority ?? existing.priority,
+    rule.description ?? existing.description, id
+  );
+}
+
+export function deleteCostRule(id: number): void {
+  db.prepare('DELETE FROM cost_rules WHERE id = ?').run(id);
+}
+
+/**
+ * 查询匹配的积分消耗规则
+ *
+ * @param taskType 'image' 或 'video'
+ * @param params 模型、地区、分辨率、时长
+ * @returns 匹配的积分消耗，无匹配返回默认值
+ */
+export function queryCostRule(
+  taskType: string,
+  params: { model?: string; region?: string; resolution?: string; duration?: number }
+): number {
+  const { model = '', region = 'cn', resolution = '2k', duration = 0 } = params;
+
+  // 查询所有同类型规则，按优先级降序
+  const rules = db.prepare(
+    'SELECT * FROM cost_rules WHERE task_type = ? ORDER BY priority DESC, id'
+  ).all(taskType) as any[];
+
+  for (const rule of rules) {
+    // 模型匹配：'*' 匹配所有，精确匹配，或模糊包含
+    if (rule.model_pattern !== '*' && !model.includes(rule.model_pattern)) continue;
+    // 地区匹配
+    if (rule.region !== '*' && rule.region !== region) continue;
+    // 分辨率匹配
+    if (rule.resolution !== '*' && rule.resolution !== resolution) continue;
+    // 时长匹配（仅视频）
+    if (taskType === 'video') {
+      if (rule.duration_min > 0 && duration < rule.duration_min) continue;
+      if (rule.duration_max > 0 && duration > rule.duration_max) continue;
+    }
+    return rule.credits_cost;
+  }
+
+  // 无匹配，返回保守默认值
+  return taskType === 'video' ? 50 : 5;
 }
 
 // ==================== API Key管理 ====================
@@ -362,11 +529,11 @@ export function getRandomAccountToken(): string | null {
  * @param token session token
  * @returns 账号信息或 null
  */
-export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string } | null {
+export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string; proxy_url: string } | null {
   // 去掉可能的区域前缀进行匹配，因为 DB 中存储的是完整 token
   const account = db.prepare(
-    'SELECT id, credits_remaining, status FROM jimeng_accounts WHERE token = ?'
-  ).get(token) as { id: number; credits_remaining: number; status: string } | undefined;
+    'SELECT id, credits_remaining, status, proxy_url FROM jimeng_accounts WHERE token = ?'
+  ).get(token) as { id: number; credits_remaining: number; status: string; proxy_url: string } | undefined;
   return account || null;
 }
 
@@ -402,7 +569,13 @@ export default {
   getAccountToken,
   updateAccountCredits,
   updateAccountStatus,
+  updateAccountProxy,
   deleteAccount,
+  getCostRules,
+  addCostRule,
+  updateCostRule,
+  deleteCostRule,
+  queryCostRule,
   generateApiKey,
   getApiKeys,
   validateApiKey,
@@ -411,5 +584,6 @@ export default {
   deleteApiKey,
   getRandomAccountToken,
   getAccountByToken,
-  getAllAccountCredits
+  getAllAccountCredits,
+  getAllAccountTokens
 };

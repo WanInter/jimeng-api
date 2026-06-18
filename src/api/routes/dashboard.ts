@@ -6,6 +6,7 @@ import EX from '@/lib/consts/exceptions.ts';
 import HTTP_STATUS_CODES from '@/lib/http-status-codes.ts';
 import db from '@/lib/database.ts';
 import { getCredit, request as jimengRequest } from '@/api/controllers/core.ts';
+import { triggerHealthCheck, triggerCreditsSync } from '@/lib/account-keeper.ts';
 
 // 验证登录状态的辅助函数
 function getSessionUserId(request: Request): number | null {
@@ -81,6 +82,12 @@ export default {
     '/api-keys': async (request: Request) => {
       requireAuth(request);
       return db.getApiKeys();
+    },
+
+    // 获取积分消耗规则列表
+    '/cost-rules': async (request: Request) => {
+      requireAuth(request);
+      return db.getCostRules();
     }
   },
 
@@ -147,15 +154,81 @@ export default {
     // 添加即梦账号
     '/accounts': async (request: Request) => {
       requireAuth(request);
-      const { name, token, region } = request.body;
+      const { name, token, region, proxy_url } = request.body;
       if (!name || !token) {
         return new Response({ error: '名称和Token不能为空' }, { statusCode: 400 });
       }
       try {
-        const id = db.addAccount(name, token, region || 'cn');
+        const id = db.addAccount(name, token, region || 'cn', proxy_url || '');
         return { success: true, id, message: '账号添加成功' };
       } catch (e) {
         return new Response({ error: '添加失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 更新账号代理
+    '/accounts/proxy': async (request: Request) => {
+      requireAuth(request);
+      const { id, proxy_url } = request.body;
+      if (!id) {
+        return new Response({ error: '缺少账号ID' }, { statusCode: 400 });
+      }
+      try {
+        db.updateAccountProxy(id, proxy_url || '');
+        return { success: true, message: '代理设置已更新' };
+      } catch (e) {
+        return new Response({ error: '更新失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 获取积分消耗规则
+    '/cost-rules': async (request: Request) => {
+      requireAuth(request);
+      return db.getCostRules();
+    },
+
+    // 添加积分消耗规则
+    '/cost-rules/add': async (request: Request) => {
+      requireAuth(request);
+      const { task_type, model_pattern, region, resolution, duration_min, duration_max, credits_cost, priority, description } = request.body;
+      if (!task_type || !credits_cost) {
+        return new Response({ error: 'task_type 和 credits_cost 不能为空' }, { statusCode: 400 });
+      }
+      try {
+        const id = db.addCostRule({ task_type, model_pattern, region, resolution, duration_min, duration_max, credits_cost, priority, description });
+        return { success: true, id, message: '规则添加成功' };
+      } catch (e) {
+        return new Response({ error: '添加失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 更新积分消耗规则
+    '/cost-rules/update': async (request: Request) => {
+      requireAuth(request);
+      const { id, ...fields } = request.body;
+      if (!id) {
+        return new Response({ error: '缺少规则ID' }, { statusCode: 400 });
+      }
+      try {
+        db.updateCostRule(id, fields);
+        return { success: true, message: '规则已更新' };
+      } catch (e) {
+        return new Response({ error: '更新失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 删除积分消耗规则
+    '/cost-rules/delete': async (request: Request) => {
+      requireAuth(request);
+      const { id } = request.body;
+      if (!id) {
+        return new Response({ error: '缺少规则ID' }, { statusCode: 400 });
+      }
+      try {
+        db.deleteCostRule(id);
+        return { success: true, message: '规则已删除' };
+      } catch (e) {
+        return new Response({ error: '删除失败: ' + e.message }, { statusCode: 500 });
       }
     },
 
@@ -205,6 +278,28 @@ export default {
       }
       db.toggleApiKey(id, is_active);
       return { success: true, message: is_active ? '已启用' : '已禁用' };
+    },
+
+    // 手动触发账号存活检测
+    '/accounts/health-check': async (request: Request) => {
+      requireAuth(request);
+      try {
+        const result = await triggerHealthCheck();
+        return { success: true, message: '存活检测完成', ...result };
+      } catch (e) {
+        return new Response({ error: '检测失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 手动触发积分同步
+    '/accounts/sync-credits': async (request: Request) => {
+      requireAuth(request);
+      try {
+        const result = await triggerCreditsSync();
+        return { success: true, message: '积分同步完成', ...result };
+      } catch (e) {
+        return new Response({ error: '同步失败: ' + e.message }, { statusCode: 500 });
+      }
     }
   },
 

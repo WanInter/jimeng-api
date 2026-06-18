@@ -6,91 +6,46 @@ import logger from "@/lib/logger.ts";
 import db from "@/lib/database.ts";
 import { getCredit } from "@/api/controllers/core.ts";
 
-// ==================== 积分消耗估算 ====================
+// ==================== 积分消耗估算（基于 DB 可配置规则） ====================
 
 /**
- * 估算生图积分消耗
+ * 查询积分消耗（优先从 DB cost_rules 表匹配，兜底用保守默认值）
  *
- * 即梦官方参考值（jimeng-4.5，2k 分辨率）：
- * - 1 张：约 4-5 积分
- * - 4 张（默认）：约 12-20 积分
- *
- * @param count 生成图片数量
- * @param resolution 分辨率（1k/2k/4k）
- */
-export function estimateImageCredits(count: number = 4, resolution: string = '2k'): number {
-  const basePerImage = resolution === '4k' ? 8 : resolution === '1k' ? 3 : 5;
-  return basePerImage * count;
-}
-
-/**
- * 估算生视频积分消耗
- *
- * 即梦官方参考值：
- * - 5s：约 20-30 积分
- * - 10s：约 40-60 积分
- * - 15s：约 60-90 积分
- *
- * @param model 视频模型
- * @param duration 时长（秒）
- */
-export function estimateVideoCredits(model: string = '', duration: number = 5): number {
-  // 高端模型消耗更高
-  const isHighEnd = model.includes('veo3') || model.includes('sora2') || model.includes('seedance-2.0');
-  const multiplier = isHighEnd ? 1.5 : 1.0;
-
-  // 按时长线性估算
-  let baseCost: number;
-  if (duration <= 5) {
-    baseCost = 25;
-  } else if (duration <= 8) {
-    baseCost = 35;
-  } else if (duration <= 10) {
-    baseCost = 50;
-  } else if (duration <= 12) {
-    baseCost = 60;
-  } else {
-    // 15s
-    baseCost = 75;
-  }
-
-  return Math.ceil(baseCost * multiplier);
-}
-
-/**
- * 统一积分估算入口
+ * @param taskType 'image' 或 'video'
+ * @param params 任务参数
+ * @returns 预估积分消耗
  */
 export function estimateCredits(
   taskType: 'image' | 'video',
-  options: { resolution?: string; count?: number; model?: string; duration?: number } = {}
+  params: { model?: string; region?: string; resolution?: string; duration?: number } = {}
 ): number {
-  if (taskType === 'video') {
-    return estimateVideoCredits(options.model, options.duration || 5);
-  }
-  return estimateImageCredits(options.count || 4, options.resolution || '2k');
+  return db.queryCostRule(taskType, params);
 }
 
-// ==================== Token 积分查询 ====================
+// ==================== Token 积分与代理查询 ====================
 
-interface TokenCredit {
+interface TokenInfo {
   token: string;
   credits: number;
+  proxyUrl: string | null;
   source: 'cache' | 'realtime';
 }
 
 /**
- * 查询单个 token 的积分
+ * 查询单个 token 的积分和代理配置
  * 优先使用 DB 缓存，缓存缺失时实时查询并更新缓存
  *
  * @param token session token
- * @returns 积分信息
+ * @returns token 信息（积分 + 代理）
  */
-async function queryTokenCredits(token: string): Promise<TokenCredit> {
-  // 先查 DB 缓存
+async function queryTokenInfo(token: string): Promise<TokenInfo> {
+  // 先查 DB 缓存（包含 proxy_url）
   const cached = db.getAccountByToken(token);
+  const accountProxy = cached?.proxy_url || null;
+
   if (cached && cached.credits_remaining > 0) {
-    logger.debug(`[负载均衡] token ${token.substring(0, 8)}... 使用缓存积分: ${cached.credits_remaining}`);
-    return { token, credits: cached.credits_remaining, source: 'cache' };
+    logger.debug(`[负载均衡] token ${token.substring(0, 8)}... 缓存积分=${cached.credits_remaining} 代理=${accountProxy || '无'}`);
+    return { token, credits: cached.credits_remaining, proxyUrl: accountProxy, source: 'cache' };
   }
 
   // 缓存缺失或为 0，实时查询
@@ -104,12 +59,34 @@ async function queryTokenCredits(token: string): Promise<TokenCredit> {
       db.updateAccountStatus(cached.id, 'active');
     }
 
-    logger.info(`[负载均衡] token ${token.substring(0, 8)}... 实时查询积分: ${total}`);
-    return { token, credits: total, source: 'realtime' };
+    logger.info(`[负载均衡] token ${token.substring(0, 8)}... 实时积分=${total} 代理=${accountProxy || '无'}`);
+    return { token, credits: total, proxyUrl: accountProxy, source: 'realtime' };
   } catch (e) {
     logger.warn(`[负载均衡] token ${token.substring(0, 8)}... 积分查询失败: ${e.message}`);
-    return { token, credits: 0, source: 'realtime' };
+    return { token, credits: 0, proxyUrl: accountProxy, source: 'realtime' };
   }
+}
+
+/**
+ * 将代理 URL 拼接到 token 前面
+ * 如果 token 已经包含代理前缀，优先使用 token 自带的
+ * 如果账号绑定了代理，使用账号的
+ *
+ * @param token 原始 token
+ * @param accountProxy 账号绑定的代理 URL
+ * @returns 拼接后的 token（代理@token 格式）
+ */
+export function buildTokenWithProxy(token: string, accountProxy: string | null): string {
+  // token 自带代理（proxy@token 格式），不覆盖
+  const proxyPattern = /^(https?|socks(?:4|5)?):\/\//i;
+  if (proxyPattern.test(token.trim())) {
+    return token;
+  }
+  // 账号绑定了代理，拼接
+  if (accountProxy) {
+    return `${accountProxy}@${token}`;
+  }
+  return token;
 }
 
 // ==================== 智能 Token 选择 ====================
@@ -121,63 +98,76 @@ async function queryTokenCredits(token: string): Promise<TokenCredit> {
  */
 export type SelectionStrategy = 'drain-low' | 'highest';
 
+export interface TokenSelection {
+  token: string;          // 原始 token
+  proxyToken: string;     // 拼接代理后的 token（可直接用于请求）
+  credits: number;
+  proxyUrl: string | null;
+}
+
 /**
  * 从多个 token 中智能选择一个
  *
  * 1. 查询所有 token 的积分（优先缓存，其次实时）
  * 2. 过滤余额不足以完成任务的 token（但至少保留 1 个）
  * 3. 按策略排序选择
+ * 4. 拼接账号绑定的代理
  *
  * @param tokens 可用 token 列表
  * @param estimatedCost 预估任务积分消耗
  * @param strategy 选择策略
- * @returns 选中的 token
+ * @returns 选中的 token 信息（含代理）
  */
 export async function selectToken(
   tokens: string[],
   estimatedCost: number,
   strategy: SelectionStrategy = 'drain-low'
-): Promise<string> {
+): Promise<TokenSelection> {
   // 只有 1 个 token，直接返回
   if (tokens.length === 1) {
-    logger.info(`[负载均衡] 仅 1 个 token，直接使用`);
-    return tokens[0];
+    const info = await queryTokenInfo(tokens[0]);
+    const proxyToken = buildTokenWithProxy(info.token, info.proxyUrl);
+    logger.info(`[负载均衡] 仅 1 个 token，直接使用，代理=${info.proxyUrl || '无'}`);
+    return { token: info.token, proxyToken, credits: info.credits, proxyUrl: info.proxyUrl };
   }
 
-  // 并行查询所有 token 的积分
-  const creditResults = await Promise.all(tokens.map(t => queryTokenCredits(t)));
+  // 并行查询所有 token 的积分和代理
+  const tokenInfos = await Promise.all(tokens.map(t => queryTokenInfo(t)));
 
-  // 记录所有 token 的积分状态
-  for (const r of creditResults) {
+  // 记录所有 token 的状态
+  for (const r of tokenInfos) {
     const masked = r.token.substring(0, 8) + '...';
-    logger.info(`[负载均衡] token=${masked} 积分=${r.credits} 来源=${r.source}`);
+    logger.info(`[负载均衡] token=${masked} 积分=${r.credits} 来源=${r.source} 代理=${r.proxyUrl || '无'}`);
   }
 
   // 过滤：积分 >= estimatedCost 的 token
-  let eligible = creditResults.filter(r => r.credits >= estimatedCost);
+  let eligible = tokenInfos.filter(r => r.credits >= estimatedCost);
 
   if (eligible.length === 0) {
-    // 没有足够积分的 token，保留全部（让上游决定是否报错）
-    logger.warn(`[负载均衡] 没有 token 的积分(${creditResults.map(r => r.credits).join('/')})能满足预估消耗 ${estimatedCost}，使用全部 token 尝试`);
-    eligible = creditResults;
+    logger.warn(`[负载均衡] 没有 token 的积分(${tokenInfos.map(r => r.credits).join('/')})能满足预估消耗 ${estimatedCost}，使用全部尝试`);
+    eligible = tokenInfos;
   } else {
-    logger.info(`[负载均衡] ${eligible.length}/${creditResults.length} 个 token 满足预估消耗 ${estimatedCost}`);
+    logger.info(`[负载均衡] ${eligible.length}/${tokenInfos.length} 个 token 满足预估消耗 ${estimatedCost}`);
   }
 
   // 按策略排序
   if (strategy === 'drain-low') {
-    // 余额升序：最小的排前面，优先用完
     eligible.sort((a, b) => a.credits - b.credits);
   } else {
-    // 余额降序：最大的排前面，优先用大余额
     eligible.sort((a, b) => b.credits - a.credits);
   }
 
   const selected = eligible[0];
+  const proxyToken = buildTokenWithProxy(selected.token, selected.proxyUrl);
   const masked = selected.token.substring(0, 8) + '...';
-  logger.info(`[负载均衡] 选中 token=${masked} 积分=${selected.credits} 策略=${strategy}`);
+  logger.info(`[负载均衡] 选中 token=${masked} 积分=${selected.credits} 策略=${strategy} 代理=${selected.proxyUrl || '无'}`);
 
-  return selected.token;
+  return {
+    token: selected.token,
+    proxyToken,
+    credits: selected.credits,
+    proxyUrl: selected.proxyUrl,
+  };
 }
 
 // ==================== 带重试的任务执行 ====================
@@ -202,13 +192,13 @@ export interface RetryOptions {
 /**
  * 带积分感知重试的任务执行
  *
- * 1. 用 selectToken 选出第一个 token
- * 2. 执行 taskFn(token)
+ * 1. 用 selectToken 选出第一个 token（含代理绑定）
+ * 2. 执行 taskFn(proxyToken)
  * 3. 如果积分不足错误，从剩余 token 中选下一个重试
  * 4. 最多重试 maxRetries 次
  *
  * @param tokens 可用 token 列表
- * @param taskFn 任务函数，接收 token 返回结果
+ * @param taskFn 任务函数，接收拼接代理后的 token
  * @param options 重试选项
  */
 export async function executeWithRetry<T>(
@@ -218,44 +208,40 @@ export async function executeWithRetry<T>(
 ): Promise<T> {
   const { maxRetries = 3, strategy = 'drain-low', estimatedCost = 0 } = options;
 
-  // 如果只有 1 个 token，不走重试逻辑
   if (tokens.length === 1) {
-    return await taskFn(tokens[0]);
+    const selection = await selectToken(tokens, estimatedCost, strategy);
+    return await taskFn(selection.proxyToken);
   }
 
   const usedTokens = new Set<string>();
   let lastError: any = null;
 
   for (let attempt = 0; attempt <= Math.min(maxRetries, tokens.length - 1); attempt++) {
-    // 可用 token = 全部 - 已用过的
     const availableTokens = tokens.filter(t => !usedTokens.has(t));
     if (availableTokens.length === 0) {
       logger.warn(`[负载均衡] 所有 token 已尝试过，无可用 token`);
       break;
     }
 
-    const token = await selectToken(availableTokens, estimatedCost, strategy);
-    usedTokens.add(token);
-    const masked = token.substring(0, 8) + '...';
+    const selection = await selectToken(availableTokens, estimatedCost, strategy);
+    usedTokens.add(selection.token);
+    const masked = selection.token.substring(0, 8) + '...';
 
     try {
-      logger.info(`[负载均衡] 第 ${attempt + 1} 次尝试，使用 token=${masked}`);
-      return await taskFn(token);
+      logger.info(`[负载均衡] 第 ${attempt + 1} 次尝试，token=${masked} 代理=${selection.proxyUrl || '无'}`);
+      return await taskFn(selection.proxyToken);
     } catch (error) {
       lastError = error;
       logger.error(`[负载均衡] token=${masked} 执行失败: ${error.message}`);
 
       if (isInsufficientCreditsError(error)) {
-        logger.warn(`[负载均衡] 积分不足错误，尝试切换 token 重试...`);
+        logger.warn(`[负载均衡] 积分不足错误，切换 token 重试...`);
         continue;
       }
-
-      // 非积分错误，直接抛出
       throw error;
     }
   }
 
-  // 所有重试都失败
   if (lastError) throw lastError;
   throw new Error('[负载均衡] 所有 token 均执行失败');
 }

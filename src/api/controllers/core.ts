@@ -1,3 +1,4 @@
+import os from "os";
 import path from "path";
 import _ from "lodash";
 import mime from "mime";
@@ -32,32 +33,115 @@ import {
   RETRY_CONFIG
 } from "@/api/consts/common.ts";
 
+// ==================== 反检测：设备标识随机化 ====================
+// 每次请求生成独立的设备标识，避免所有请求共享同一设备指纹
+function generateDeviceId(): string {
+  return String(Math.floor(Math.random() * 999999999999999999) + 7000000000000000000);
+}
+function generateWebId(): string {
+  return String(Math.floor(Math.random() * 999999999999999999) + 7000000000000000000);
+}
+function generateUserId(): string {
+  return util.uuid(false);
+}
+
+// ==================== 反检测：User-Agent 池 ====================
+const UA_POOL = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+];
+
+// 从 UA 解析 Chrome 版本号
+function extractChromeVersion(ua: string): string {
+  const match = ua.match(/Chrome\/(\d+)/);
+  return match ? match[1] : "142";
+}
+
+// 检测实际操作系统
+const IS_LINUX = os.platform() !== "win32";
+const PLATFORM_STR = IS_LINUX ? "Linux" : "Windows";
+const SEC_CH_UA_PLATFORM = IS_LINUX ? '"Linux"' : '"Windows"';
+
+// ==================== 反检测：速率限制器 ====================
+// Per-token 令牌桶限流，防止高频请求触发风控
+const rateLimiters = new Map<string, { tokens: number; lastRefill: number }>();
+const RATE_LIMIT_MAX_TOKENS = 5; // 桶容量：最多 5 个并发请求
+const RATE_LIMIT_REFILL_RATE = 1; // 每秒补充 1 个令牌
+
+function acquireRateLimit(token: string): void {
+  const now = Date.now();
+  let limiter = rateLimiters.get(token);
+  if (!limiter) {
+    limiter = { tokens: RATE_LIMIT_MAX_TOKENS, lastRefill: now };
+    rateLimiters.set(token, limiter);
+  }
+
+  // 补充令牌
+  const elapsed = (now - limiter.lastRefill) / 1000;
+  limiter.tokens = Math.min(RATE_LIMIT_MAX_TOKENS, limiter.tokens + elapsed * RATE_LIMIT_REFILL_RATE);
+  limiter.lastRefill = now;
+
+  // 如果没有可用令牌，阻塞等待
+  if (limiter.tokens < 1) {
+    const waitMs = ((1 - limiter.tokens) / RATE_LIMIT_REFILL_RATE) * 1000;
+    // 同步等待（通过 Atomics 实现）
+    const sab = new SharedArrayBuffer(4);
+    const int32 = new Int32Array(sab);
+    Atomics.wait(int32, 0, 0, Math.min(waitMs, 5000));
+    limiter.tokens = 1;
+  }
+
+  limiter.tokens -= 1;
+}
+
+// ==================== 反检测：Cookie 生成 ====================
+// 生成随机 ttwid（字节跳动 WebID 跟踪标识）
+function generateTtwid(): string {
+  const chars = "0123456789abcdef";
+  let result = "";
+  for (let i = 0; i < 32; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
+// 生成随机 odin_tt
+function generateOdinTt(): string {
+  const chars = "0123456789abcdef";
+  let result = "";
+  for (let i = 0; i < 32; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
+// 生成随机 s_v_web_id
+function generateSvWebId(): string {
+  const chars = "0123456789abcdef";
+  let result = "";
+  for (let i = 0; i < 32; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
+// 生成随机 passport_csrf_token
+function generatePassportCsrfToken(): string {
+  const chars = "0123456789abcdef";
+  let result = "";
+  for (let i = 0; i < 32; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
 // 模型名称
 const MODEL_NAME = "jimeng";
-// 设备ID
-const DEVICE_ID = Math.random() * 999999999999999999 + 7000000000000000000;
-// WebID
-const WEB_ID = Math.random() * 999999999999999999 + 7000000000000000000;
-// 用户ID（32位hex，无横线）
-const USER_ID = util.uuid(false);
-// 伪装headers
-const FAKE_HEADERS = {
-  Accept: "application/json, text/plain, */*",
-  "Accept-Encoding": "gzip, deflate, br, zstd",
-  "Accept-language": "zh-CN,zh;q=0.9",
-  "Cache-control": "no-cache",
-  Appvr: VERSION_CODE,
-  Pragma: "no-cache",
-  Priority: "u=1, i",
-  Pf: PLATFORM_CODE,
-  "Sec-Ch-Ua": '"Google Chrome";v="142", "Chromium";v="142", "Not_A Brand";v="99"',
-  "Sec-Ch-Ua-Mobile": "?0",
-  "Sec-Ch-Ua-Platform": '"Windows"',
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-origin",
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-};
 // 文件最大大小
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
 
@@ -156,7 +240,14 @@ export function getAssistantId(regionInfo: RegionInfo): number {
 }
 
 /**
- * 生成cookie
+ * 生成cookie（每次请求独立生成，模拟真实浏览器 Cookie 行为）
+ *
+ * 包含字节跳动完整追踪 Cookie：
+ * - ttwid: WebID 跟踪标识
+ * - odin_tt: 设备标识
+ * - s_v_web_id: 验证 Cookie
+ * - fpk1: 浏览器指纹
+ * - passport_csrf_token: CSRF 保护
  */
 export function generateCookie(refreshToken: string) {
   const { token: tokenWithRegion } = parseProxyFromToken(refreshToken);
@@ -165,15 +256,31 @@ export function generateCookie(refreshToken: string) {
     ? tokenWithRegion.substring(3)
     : tokenWithRegion;
 
+  const deviceId = generateDeviceId();
+  const webId = generateWebId();
+  const userId = generateUserId();
+  const now = util.unixTimestamp();
+
+  // 动态生成 sid_guard 过期时间（当前时间 + 60天）
+  const expiryDate = new Date((now + 5184000) * 1000);
+  const expiryStr = expiryDate.toUTCString().replace(/,/g, "%2C").replace(/ /g, "+").replace(/:/g, "%3A");
+
   return [
-    `_tea_web_id=${WEB_ID}`,
+    `ttwid=${generateTtwid()}`,
+    `odin_tt=${generateOdinTt()}`,
+    `s_v_web_id=${generateSvWebId()}`,
+    `fpk1=${generatePassportCsrfToken()}`,
+    `passport_csrf_token=${generatePassportCsrfToken()}`,
+    `_tea_web_id=${webId}`,
     `is_staff_user=false`,
-    `sid_guard=${token}%7C${util.unixTimestamp()}%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT`,
-    `uid_tt=${USER_ID}`,
-    `uid_tt_ss=${USER_ID}`,
+    `sid_guard=${token}%7C${now}%7C5184000%7C${expiryStr}`,
+    `uid_tt=${userId}`,
+    `uid_tt_ss=${userId}`,
     `sid_tt=${token}`,
     `sessionid=${token}`,
     `sessionid_ss=${token}`,
+    `store-region=${isUS ? 'us' : isHK ? 'hk' : isJP ? 'jp' : isSG ? 'sg' : 'cn-gd'}`,
+    `store-region-src=uid`,
   ].join("; ");
 }
 
@@ -285,22 +392,46 @@ export async function request(
 
   const origin = new URL(baseUrl).origin;
 
+  // 反检测：应用 per-token 速率限制
+  acquireRateLimit(tokenWithRegion);
+
+  // 反检测：每次请求独立生成设备标识
+  const webId = generateWebId();
+
   const fullUrl = `${baseUrl}${uri}`;
   const requestParams = options.noDefaultParams ? (options.params || {}) : {
     aid: aid,
     device_platform: "web",
     region: region,
-    ...(isUS || isHK || isJP || isSG ? {} : { webId: WEB_ID }),
+    ...(isUS || isHK || isJP || isSG ? {} : { webId: webId }),
     da_version: DA_VERSION,
-    os: "windows",
+    os: IS_LINUX ? "linux" : "windows",
     web_component_open_flag: 1,
     web_version: WEB_VERSION,
     aigc_features: "app_lip_sync",
     ...(options.params || {}),
   };
 
+  // 反检测：随机选择 UA，构建匹配的请求头
+  const ua = UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
+  const chromeVersion = extractChromeVersion(ua);
+
   const headers = {
-    ...FAKE_HEADERS,
+    Accept: "application/json, text/plain, */*",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-language": "zh-CN,zh;q=0.9",
+    "Cache-control": "no-cache",
+    Appvr: VERSION_CODE,
+    Pragma: "no-cache",
+    Priority: "u=1, i",
+    Pf: PLATFORM_CODE,
+    "Sec-Ch-Ua": `"Google Chrome";v="${chromeVersion}", "Chromium";v="${chromeVersion}", "Not_A Brand";v="99"`,
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": SEC_CH_UA_PLATFORM,
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "User-Agent": ua,
     Origin: origin,
     Referer: origin,
     "App-Sdk-Version": "48.0.0",
@@ -315,13 +446,13 @@ export async function request(
     ...(options.headers || {}),
   };
 
-  logger.info(`发送请求: ${method.toUpperCase()} ${fullUrl}`);
+  // 日志脱敏：不记录完整 URL（含 token）、Cookie、请求体
+  const uriOnly = uri;
+  logger.info(`发送请求: ${method.toUpperCase()} ${uriOnly}`);
   if (proxyUrl) {
     const maskedProxyUrl = proxyUrl.replace(/\/\/([^@/]+)@/i, "//***@");
-    logger.info(`使用代理: ${maskedProxyUrl}`);
+    logger.debug(`使用代理: ${maskedProxyUrl}`);
   }
-  logger.info(`请求参数: ${JSON.stringify(requestParams)}`);
-  logger.info(`请求数据: ${JSON.stringify(options.data || {})}`);
 
   const proxyAgent = proxyUrl
     ? (proxyUrl.toLowerCase().startsWith("socks")
@@ -337,7 +468,7 @@ export async function request(
   while (retries <= maxRetries) {
     try {
       if (retries > 0) {
-        logger.info(`第 ${retries} 次重试请求: ${method.toUpperCase()} ${fullUrl}`);
+        logger.info(`第 ${retries} 次重试请求: ${method.toUpperCase()} ${uriOnly}`);
         // 重试前等待一段时间
         await new Promise(resolve => setTimeout(resolve, RETRY_CONFIG.RETRY_DELAY));
       }
@@ -353,17 +484,11 @@ export async function request(
         ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}),
       });
 
-      // 记录响应状态和头信息
-      logger.info(`响应状态: ${response.status} ${response.statusText}`);
+      // 日志脱敏：仅记录状态码，不记录响应数据
+      logger.debug(`响应状态: ${response.status} ${response.statusText}`);
 
       // 流式响应直接返回response
       if (options.responseType == "stream") return response;
-
-      // 记录响应数据摘要
-      const responseDataSummary = JSON.stringify(response.data).substring(0, 500) +
-        (JSON.stringify(response.data).length > 500 ? "..." : "");
-      //const responseDataSummary = JSON.stringify(response.data)
-      logger.info(`响应数据摘要: ${responseDataSummary}`);
 
       // 检查HTTP状态码
       if (response.status >= 400) {
@@ -409,7 +534,6 @@ export async function request(
     logger.error(`请求失败，已重试 ${retries} 次: ${lastError.message}`);
     if (lastError.response) {
       logger.error(`响应状态: ${lastError.response.status}`);
-      logger.error(`响应数据: ${JSON.stringify(lastError.response.data)}`);
     }
     throw lastError;
   } else {
