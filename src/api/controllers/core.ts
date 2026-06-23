@@ -5,11 +5,13 @@ import mime from "mime";
 import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { SocksProxyAgent } from "socks-proxy-agent";
+import { browserFetchJson } from "@/lib/browser-fetch.ts";
 
 import APIException from "@/lib/exceptions/APIException.ts";
 import EX from "@/api/consts/exceptions.ts";
 import logger from "@/lib/logger.ts";
 import util from "@/lib/util.ts";
+import db from "@/lib/database.ts";
 import { JimengErrorHandler, JimengErrorResponse } from "@/lib/error-handler.ts";
 import { BASE_URL_DREAMINA_US, BASE_URL_DREAMINA_HK, DA_VERSION, WEB_VERSION } from "@/api/consts/dreamina.ts";
 
@@ -23,12 +25,14 @@ import {
   DEFAULT_ASSISTANT_ID_HK,
   DEFAULT_ASSISTANT_ID_JP,
   DEFAULT_ASSISTANT_ID_SG,
+  DEFAULT_ASSISTANT_ID_VN,
   PLATFORM_CODE,
   REGION_CN,
   REGION_US,
   REGION_HK,
   REGION_JP,
   REGION_SG,
+  REGION_VN,
   VERSION_CODE,
   RETRY_CONFIG
 } from "@/api/consts/common.ts";
@@ -47,13 +51,8 @@ function generateUserId(): string {
 
 // ==================== 反检测：User-Agent 池 ====================
 const UA_POOL = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+  // Match BitBrowser 14 / Dreamina VN environment. Random UA caused Shark fingerprint mismatch.
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
 ];
 
 // 从 UA 解析 Chrome 版本号
@@ -64,8 +63,9 @@ function extractChromeVersion(ua: string): string {
 
 // 检测实际操作系统
 const IS_LINUX = os.platform() !== "win32";
-const PLATFORM_STR = IS_LINUX ? "Linux" : "Windows";
-const SEC_CH_UA_PLATFORM = IS_LINUX ? '"Linux"' : '"Windows"';
+// Match BitBrowser macOS fingerprint instead of the server OS.
+const PLATFORM_STR = "macOS";
+const SEC_CH_UA_PLATFORM = '"macOS"';
 
 // ==================== 反检测：速率限制器 ====================
 // Per-token 令牌桶限流，防止高频请求触发风控
@@ -140,6 +140,13 @@ function generatePassportCsrfToken(): string {
   return result;
 }
 
+
+function getCookieValue(cookie: string, name: string): string | undefined {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${escapedName}=([^;]*)`));
+  return match ? match[1] : undefined;
+}
+
 // 模型名称
 const MODEL_NAME = "jimeng";
 // 文件最大大小
@@ -167,6 +174,7 @@ export interface RegionInfo {
   isHK: boolean;
   isJP: boolean;
   isSG: boolean;
+  isVN: boolean;
   isInternational: boolean;
   isCN: boolean;
 }
@@ -199,13 +207,15 @@ export function parseRegionFromToken(refreshToken: string): RegionInfo {
   const isHK = token.startsWith('hk-');
   const isJP = token.startsWith('jp-');
   const isSG = token.startsWith('sg-');
-  const isInternational = isUS || isHK || isJP || isSG;
+  const isVN = token.startsWith('vn-');
+  const isInternational = isUS || isHK || isJP || isSG || isVN;
 
   return {
     isUS,
     isHK,
     isJP,
     isSG,
+    isVN,
     isInternational,
     isCN: !isInternational
   };
@@ -235,6 +245,7 @@ export function getAssistantId(regionInfo: RegionInfo): number {
   if (regionInfo.isUS) return DEFAULT_ASSISTANT_ID_US;
   if (regionInfo.isJP) return DEFAULT_ASSISTANT_ID_JP;
   if (regionInfo.isSG) return DEFAULT_ASSISTANT_ID_SG;
+  if (regionInfo.isVN) return DEFAULT_ASSISTANT_ID_VN;
   if (regionInfo.isHK) return DEFAULT_ASSISTANT_ID_HK;
   return DEFAULT_ASSISTANT_ID_CN;
 }
@@ -251,8 +262,8 @@ export function getAssistantId(regionInfo: RegionInfo): number {
  */
 export function generateCookie(refreshToken: string) {
   const { token: tokenWithRegion } = parseProxyFromToken(refreshToken);
-  const { isUS, isHK, isJP, isSG } = parseRegionFromToken(tokenWithRegion);
-  const token = (isUS || isHK || isJP || isSG)
+  const { isUS, isHK, isJP, isSG, isVN } = parseRegionFromToken(tokenWithRegion);
+  const token = (isUS || isHK || isJP || isSG || isVN)
     ? tokenWithRegion.substring(3)
     : tokenWithRegion;
 
@@ -279,7 +290,7 @@ export function generateCookie(refreshToken: string) {
     `sid_tt=${token}`,
     `sessionid=${token}`,
     `sessionid_ss=${token}`,
-    `store-region=${isUS ? 'us' : isHK ? 'hk' : isJP ? 'jp' : isSG ? 'sg' : 'cn-gd'}`,
+    `store-region=${isUS ? 'us' : isHK ? 'hk' : isJP ? 'jp' : (isSG || isVN) ? 'sg' : 'cn-gd'}`,
     `store-region-src=uid`,
   ].join("; ");
 }
@@ -347,7 +358,7 @@ export async function request(
 ) {
   const { token: tokenWithRegion, proxyUrl } = parseProxyFromToken(refreshToken);
   const regionInfo = parseRegionFromToken(tokenWithRegion);
-  const { isUS, isHK, isJP, isSG } = regionInfo;
+  const { isUS, isHK, isJP, isSG, isVN } = regionInfo;
   await acquireToken(regionInfo.isInternational ? tokenWithRegion.substring(3) : tokenWithRegion);
   const deviceTime = util.unixTimestamp();
   const sign = util.md5(
@@ -366,7 +377,7 @@ export async function request(
     }
     aid = DEFAULT_ASSISTANT_ID_US;
     region = REGION_US;
-  } else if (isHK || isJP || isSG) {
+  } else if (isHK || isJP || isSG || isVN) {
     // HK, JP and SG regions use the same SG base URL
     if (uri.startsWith("/commerce/")) {
       baseUrl = BASE_URL_HK_COMMERCE;
@@ -378,6 +389,10 @@ export async function request(
       region = REGION_JP;
     } else if (isSG) {
       aid = DEFAULT_ASSISTANT_ID_SG;
+      region = REGION_SG;
+    } else if (isVN) {
+      aid = DEFAULT_ASSISTANT_ID_VN;
+      // 越南账号当前仍归入 Dreamina 亚太/新加坡链路；生成接口用 SG 区域参数更接近真实站点。
       region = REGION_SG;
     } else {
       aid = DEFAULT_ASSISTANT_ID_HK;
@@ -403,9 +418,9 @@ export async function request(
     aid: aid,
     device_platform: "web",
     region: region,
-    ...(isUS || isHK || isJP || isSG ? {} : { webId: webId }),
+    ...(isUS || isHK || isJP || isSG || isVN ? {} : { webId: webId }),
     da_version: DA_VERSION,
-    os: IS_LINUX ? "linux" : "windows",
+    os: "mac",
     web_component_open_flag: 1,
     web_version: WEB_VERSION,
     aigc_features: "app_lip_sync",
@@ -416,10 +431,21 @@ export async function request(
   const ua = UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
   const chromeVersion = extractChromeVersion(ua);
 
+  const boundCookie = db.getAccountCookieByToken(refreshToken) || db.getAccountCookieByToken(tokenWithRegion) || "";
+  const requestCookie = boundCookie || generateCookie(tokenWithRegion);
+  const cookieMsToken = boundCookie ? getCookieValue(boundCookie, "msToken") : undefined;
+  const cookieSvWebId = boundCookie ? getCookieValue(boundCookie, "s_v_web_id") : undefined;
+
+  if (cookieMsToken && !requestParams.msToken) requestParams.msToken = cookieMsToken;
+  if (cookieSvWebId) {
+    if (!requestParams.verifyFp) requestParams.verifyFp = cookieSvWebId;
+    if (!requestParams.fp) requestParams.fp = cookieSvWebId;
+  }
+
   const headers = {
     Accept: "application/json, text/plain, */*",
     "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-language": "zh-CN,zh;q=0.9",
+    "Accept-language": (isVN ? "vi-VN,vi;q=0.9,fr-FR;q=0.8,fr;q=0.7,en-US;q=0.6,en;q=0.5" : "zh-CN,zh;q=0.9"),
     "Cache-control": "no-cache",
     Appvr: VERSION_CODE,
     Pragma: "no-cache",
@@ -436,10 +462,10 @@ export async function request(
     Referer: origin,
     "App-Sdk-Version": "48.0.0",
     Appid: aid,
-    Cookie: generateCookie(tokenWithRegion),
+    Cookie: requestCookie,
     "Device-Time": deviceTime,
-    Lan: isUS ? "en" : isJP ? "ja" : (isHK || isSG) ? "en" : "zh-Hans",
-    Loc: isUS ? "us" : isJP ? "jp" : isHK ? "hk" : isSG ? "sg" : "cn",
+    Lan: isUS ? "en" : isJP ? "ja" : (isHK || isSG || isVN) ? "en" : "zh-Hans",
+    Loc: isUS ? "us" : isJP ? "jp" : isHK ? "hk" : (isSG || isVN) ? "sg" : "cn",
     Sign: sign,
     "Sign-Ver": "1",
     Tdid: "",
@@ -451,7 +477,10 @@ export async function request(
   logger.info(`发送请求: ${method.toUpperCase()} ${uriOnly}`);
   if (proxyUrl) {
     const maskedProxyUrl = proxyUrl.replace(/\/\/([^@/]+)@/i, "//***@");
-    logger.debug(`使用代理: ${maskedProxyUrl}`);
+    logger.info(`使用代理: ${maskedProxyUrl}`);
+  }
+  if (boundCookie) {
+    logger.info(`使用账号绑定 Cookie${cookieMsToken ? " + msToken" : ""}${cookieSvWebId ? " + verifyFp" : ""}`);
   }
 
   const proxyAgent = proxyUrl
@@ -473,16 +502,28 @@ export async function request(
         await new Promise(resolve => setTimeout(resolve, RETRY_CONFIG.RETRY_DELAY));
       }
 
-      const response = await axios.request({
-        method,
-        url: fullUrl,
-        params: requestParams,
-        headers: headers,
-        timeout: 45000, // 增加超时时间到45秒
-        validateStatus: () => true, // 允许任何状态码
-        ..._.omit(options, "params", "headers", "noDefaultParams"),
-        ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}),
-      });
+      let response: any;
+      const useBrowserProxy = method.toLowerCase() === "post" && (
+        uri === "/mweb/v1/aigc_draft/generate" || uri === "/mweb/v1/get_history_by_ids"
+      );
+      if (useBrowserProxy) {
+        const qs = new URLSearchParams(requestParams as any).toString();
+        const browserUrl = `${fullUrl}${qs ? `?${qs}` : ""}`;
+        const browserData = (options as any).data || {};
+        const browserBody = await browserFetchJson(browserUrl, browserData);
+        response = { status: 200, statusText: "OK", data: browserBody };
+      } else {
+        response = await axios.request({
+          method,
+          url: fullUrl,
+          params: requestParams,
+          headers: headers,
+          timeout: 45000, // 增加超时时间到45秒
+          validateStatus: () => true, // 允许任何状态码
+          ..._.omit(options, "params", "headers", "noDefaultParams"),
+          ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}),
+        });
+      }
 
       // 日志脱敏：仅记录状态码，不记录响应数据
       logger.debug(`响应状态: ${response.status} ${response.statusText}`);
@@ -770,7 +811,45 @@ export function checkResult(result: AxiosResponse) {
  * @param authorization 认证字符串
  */
 export function tokenSplit(authorization: string) {
-  return authorization.replace("Bearer ", "").split(",");
+  const rawTokens = authorization.replace(/^Bearer\s+/i, "").split(",");
+
+  return rawTokens.map((rawToken) => {
+    const trimmedToken = rawToken.trim();
+    if (!trimmedToken) return trimmedToken;
+
+    // 管理后台生成的 API Key 以 jm- 开头。主生成接口需要先把 API Key
+    // 转换成绑定的即梦 sessionid；否则会把 jm-xxxx 当成即梦 sessionid
+    // 发给上游，导致 check login error。
+    if (!trimmedToken.startsWith("jm-")) {
+      return trimmedToken;
+    }
+
+    const validation = db.validateApiKey(trimmedToken);
+    if (!validation.valid) {
+      throw new APIException(EX.API_TOKEN_EXPIRES, "API Key 无效或已禁用");
+    }
+
+    let sessionToken: string | null = null;
+    if (validation.accountId) {
+      sessionToken = db.getAccountToken(validation.accountId);
+    } else {
+      sessionToken = db.getRandomAccountToken();
+    }
+
+    if (!sessionToken) {
+      throw new APIException(EX.API_TOKEN_EXPIRES, "API Key 未绑定可用的即梦账号");
+    }
+
+    if (validation.keyId) {
+      try {
+        db.incrementApiKeyUsage(validation.keyId);
+      } catch (e) {
+        logger.warn("更新 API Key 调用次数失败:", e.message);
+      }
+    }
+
+    return sessionToken;
+  });
 }
 
 /**
