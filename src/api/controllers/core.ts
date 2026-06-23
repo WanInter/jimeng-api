@@ -5,7 +5,7 @@ import mime from "mime";
 import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { SocksProxyAgent } from "socks-proxy-agent";
-import { browserFetchJson } from "@/lib/browser-fetch.ts";
+import { browserSignRequest } from "@/lib/browser-fetch.ts";
 
 import APIException from "@/lib/exceptions/APIException.ts";
 import EX from "@/api/consts/exceptions.ts";
@@ -510,8 +510,17 @@ export async function request(
         const qs = new URLSearchParams(requestParams as any).toString();
         const browserUrl = `${fullUrl}${qs ? `?${qs}` : ""}`;
         const browserData = (options as any).data || {};
-        const browserBody = await browserFetchJson(browserUrl, browserData);
-        response = { status: 200, statusText: "OK", data: browserBody };
+        const signed = await browserSignRequest(browserUrl, browserData);
+        response = await axios.request({
+          method,
+          url: signed.url,
+          headers: { ...headers, ...signed.headers, Cookie: requestCookie },
+          data: browserData,
+          timeout: 45000,
+          validateStatus: () => true,
+          ..._.omit(options, "params", "headers", "noDefaultParams", "data"),
+          ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent, proxy: false } : {}),
+        });
       } else {
         response = await axios.request({
           method,
