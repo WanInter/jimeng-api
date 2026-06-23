@@ -2,7 +2,7 @@ import util from "@/lib/util.ts";
 import { DRAFT_MIN_VERSION, DRAFT_VERSION, RESOLUTION_OPTIONS, RESOLUTION_OPTIONS_NANOBANANAPRO_4K } from "@/api/consts/common.ts";
 import { RegionInfo, getAssistantId } from "@/api/controllers/core.ts";
 
-export type RegionKey = "CN" | "US" | "HK" | "JP" | "SG";
+export type RegionKey = "CN" | "US" | "HK" | "JP" | "SG" | "VN";
 
 export interface ResolutionResult {
   width: number;
@@ -17,6 +17,7 @@ function getRegionKey(regionInfo: RegionInfo): RegionKey {
   if (regionInfo.isHK) return "HK";
   if (regionInfo.isJP) return "JP";
   if (regionInfo.isSG) return "SG";
+  if (regionInfo.isVN) return "SG";
   return "CN";
 }
 
@@ -60,7 +61,7 @@ function lookupResolution(resolution: string = "2k", ratio: string = "1:1", user
  * 统一分辨率处理逻辑
  * - CN 站: 不支持 nano 系列模型 (nanobanana/nanobananapro)，抛出异常
  * - US 站 nanobanana: 强制 1024x1024 @ 2k，image_ratio=1
- * - HK/JP/SG 站 nanobanana: 强制 1k 分辨率，但 ratio 可自定义
+ * - HK/JP/SG/VN 站 nanobanana: 强制 1k 分辨率，但 ratio 可自定义
  * - 所有站点 nanobananapro: resolution 和 ratio 都可自定义
  */
 export function resolveResolution(
@@ -90,7 +91,7 @@ export function resolveResolution(
         isForced: true,
       };
     } else if (regionKey === "HK" || regionKey === "JP" || regionKey === "SG") {
-      // HK/JP/SG 站: 强制 1k 分辨率，但 ratio 可自定义
+      // HK/JP/SG/VN 站: 强制 1k 分辨率，但 ratio 可自定义
       const params = lookupResolution("1k", ratio, userModel);
       return {
         width: params.width,

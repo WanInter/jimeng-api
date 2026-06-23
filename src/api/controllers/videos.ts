@@ -22,7 +22,7 @@ export function getModel(model: string, regionInfo: RegionInfo) {
   let modelMap: Record<string, string>;
   if (regionInfo.isUS) {
     modelMap = VIDEO_MODEL_MAP_US;
-  } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+  } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
     modelMap = VIDEO_MODEL_MAP_ASIA;
   } else {
     modelMap = VIDEO_MODEL_MAP;

@@ -117,6 +117,7 @@ db.exec(`
 
 // 迁移：为已有表添加新字段（如果不存在）
 try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN proxy_url TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN cookie TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
 
 // 初始化默认积分消耗规则（仅在表为空时插入）
 const ruleCount = (db.prepare('SELECT COUNT(*) as c FROM cost_rules').get() as { c: number }).c;
@@ -352,22 +353,22 @@ export function clearLogs(): void {
 
 // ==================== 即梦账号管理 ====================
 
-export function addAccount(name: string, token: string, region: string = 'cn', proxyUrl: string = ''): number {
+export function addAccount(name: string, token: string, region: string = 'cn', proxyUrl: string = '', cookie: string = ''): number {
   const preview = keyPreview(token);
-  const result = db.prepare('INSERT INTO jimeng_accounts (name, token, token_preview, region, proxy_url) VALUES (?, ?, ?, ?, ?)')
-    .run(name, token, preview, region, proxyUrl);
+  const result = db.prepare('INSERT INTO jimeng_accounts (name, token, token_preview, region, proxy_url, cookie) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(name, token, preview, region, proxyUrl, cookie);
   return result.lastInsertRowid as number;
 }
 
 export function getAccounts() {
-  return db.prepare('SELECT id, name, token_preview, region, proxy_url, credits_remaining, credits_total, status, last_check, created_at FROM jimeng_accounts ORDER BY created_at DESC').all();
+  return db.prepare('SELECT id, name, token_preview, region, proxy_url, CASE WHEN cookie IS NOT NULL AND cookie != \'\' THEN 1 ELSE 0 END as has_cookie, credits_remaining, credits_total, status, last_check, created_at FROM jimeng_accounts ORDER BY created_at DESC').all();
 }
 
 /**
  * 获取所有账号的完整 token（用于保活检测）
  */
 export function getAllAccountTokens() {
-  return db.prepare('SELECT id, name, token, proxy_url, status FROM jimeng_accounts ORDER BY id').all() as { id: number; name: string; token: string; proxy_url: string | null; status: string }[];
+  return db.prepare('SELECT id, name, token, proxy_url, cookie, status FROM jimeng_accounts ORDER BY id').all() as { id: number; name: string; token: string; proxy_url: string | null; cookie?: string | null; status: string }[];
 }
 
 export function getAccountById(id: number) {
@@ -396,6 +397,15 @@ export function deleteAccount(id: number): void {
 
 export function updateAccountProxy(id: number, proxyUrl: string): void {
   db.prepare('UPDATE jimeng_accounts SET proxy_url = ? WHERE id = ?').run(proxyUrl, id);
+}
+
+export function updateAccountCookie(id: number, cookie: string): void {
+  db.prepare('UPDATE jimeng_accounts SET cookie = ? WHERE id = ?').run(cookie, id);
+}
+
+export function getAccountCookieByToken(token: string): string | null {
+  const account = db.prepare('SELECT cookie FROM jimeng_accounts WHERE token = ?').get(token) as { cookie: string } | undefined;
+  return account?.cookie || null;
 }
 
 // ==================== 积分消耗规则管理 ====================
@@ -529,11 +539,11 @@ export function getRandomAccountToken(): string | null {
  * @param token session token
  * @returns 账号信息或 null
  */
-export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string; proxy_url: string } | null {
+export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string } | null {
   // 去掉可能的区域前缀进行匹配，因为 DB 中存储的是完整 token
   const account = db.prepare(
-    'SELECT id, credits_remaining, status, proxy_url FROM jimeng_accounts WHERE token = ?'
-  ).get(token) as { id: number; credits_remaining: number; status: string; proxy_url: string } | undefined;
+    'SELECT id, credits_remaining, status, proxy_url, cookie FROM jimeng_accounts WHERE token = ?'
+  ).get(token) as { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string } | undefined;
   return account || null;
 }
 
@@ -570,6 +580,8 @@ export default {
   updateAccountCredits,
   updateAccountStatus,
   updateAccountProxy,
+  updateAccountCookie,
+  getAccountCookieByToken,
   deleteAccount,
   getCostRules,
   addCostRule,

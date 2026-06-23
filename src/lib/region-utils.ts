@@ -15,7 +15,7 @@ export class RegionUtils {
     }
 
     // US/HK/JP/SG 使用相同的 service_id
-    if (regionInfo.isUS || regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+    if (regionInfo.isUS || regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
       return "wopfjsm1ax";
     }
 
@@ -31,7 +31,7 @@ export class RegionUtils {
       return BASE_URL_IMAGEX_US;
     }
 
-    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
       return BASE_URL_IMAGEX_HK;
     }
 
@@ -46,7 +46,7 @@ export class RegionUtils {
       return new URL(BASE_URL_DREAMINA_US).origin;
     }
 
-    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
       return new URL(BASE_URL_DREAMINA_HK).origin;
     }
 
@@ -61,7 +61,7 @@ export class RegionUtils {
       return 'us-east-1';
     }
 
-    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+    if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
       return 'ap-southeast-1';
     }
 

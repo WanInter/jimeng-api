@@ -61,6 +61,7 @@ curl -X POST http://localhost:5100/v1/images/generations \
 > - **香港站**：需要添加 **hk-** 前缀，如 `Bearer hk-your_session_id`
 > - **日本站**：需要添加 **jp-** 前缀，如 `Bearer jp-your_session_id`
 > - **新加坡站**: 需要添加 **sg-** 前缀，如 `Bearer sg-your_session_id`
+> - **越南站**: 需要添加 **vn-** 前缀，如 `Bearer vn-your_session_id`
 >
 > **注意2**: 支持在 Token 中绑定代理（HTTP/SOCKS5等），详见 [Token 绑定代理功能](#token-绑定代理功能-新)。
 >

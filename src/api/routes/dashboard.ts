@@ -154,12 +154,12 @@ export default {
     // 添加即梦账号
     '/accounts': async (request: Request) => {
       requireAuth(request);
-      const { name, token, region, proxy_url } = request.body;
+      const { name, token, region, proxy_url, cookie } = request.body;
       if (!name || !token) {
         return new Response({ error: '名称和Token不能为空' }, { statusCode: 400 });
       }
       try {
-        const id = db.addAccount(name, token, region || 'cn', proxy_url || '');
+        const id = db.addAccount(name, token, region || 'cn', proxy_url || '', cookie || '');
         return { success: true, id, message: '账号添加成功' };
       } catch (e) {
         return new Response({ error: '添加失败: ' + e.message }, { statusCode: 500 });
@@ -176,6 +176,21 @@ export default {
       try {
         db.updateAccountProxy(id, proxy_url || '');
         return { success: true, message: '代理设置已更新' };
+      } catch (e) {
+        return new Response({ error: '更新失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 更新账号 Cookie
+    '/accounts/cookie': async (request: Request) => {
+      requireAuth(request);
+      const { id, cookie } = request.body;
+      if (!id) {
+        return new Response({ error: '缺少账号ID' }, { statusCode: 400 });
+      }
+      try {
+        db.updateAccountCookie(id, cookie || '');
+        return { success: true, message: 'Cookie 已更新' };
       } catch (e) {
         return new Response({ error: '更新失败: ' + e.message }, { statusCode: 500 });
       }

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jimeng-api-config
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: jimeng-api
+data:
+  SERVER_ENV: "dev"
+  SERVER_HOST: "0.0.0.0"
+  SERVER_PORT: "5100"
+  DB_PATH: "/app/data/jimeng.db"

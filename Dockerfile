@@ -51,10 +51,11 @@ RUN npm ci --omit=dev --registry https://registry.npmmirror.com/ && \
 # 从构建阶段复制构建产物
 COPY --from=builder --chown=jimeng:nodejs /app/dist ./dist
 COPY --from=builder --chown=jimeng:nodejs /app/configs ./configs
+COPY --from=builder --chown=jimeng:nodejs /app/public ./public
 
 # 创建应用需要的目录并设置权限
-RUN mkdir -p /app/logs /app/tmp && \
-    chown -R jimeng:nodejs /app/logs /app/tmp
+RUN mkdir -p /app/logs /app/tmp /app/data && \
+    chown -R jimeng:nodejs /app/logs /app/tmp /app/data
 
 # 设置环境变量
 ENV SERVER_PORT=5100

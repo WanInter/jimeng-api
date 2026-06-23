@@ -39,7 +39,7 @@ export function getModel(model: string, regionInfo: RegionInfo): ModelResult {
   let modelMap: Record<string, string>;
   if (regionInfo.isUS) {
     modelMap = IMAGE_MODEL_MAP_US;
-  } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
+  } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
     modelMap = IMAGE_MODEL_MAP_ASIA;
   } else {
     modelMap = IMAGE_MODEL_MAP;
@@ -69,8 +69,8 @@ function logResolutionInfo(userModel: string, resolution: ResolutionResult, regi
   if (userModel === 'nanobanana') {
     if (regionInfo.isUS) {
       logger.warn('美区 nanobanana 模型固定使用1024x1024分辨率和2k的清晰度，比例固定为1:1。');
-    } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG) {
-      const regionName = regionInfo.isHK ? '香港' : regionInfo.isJP ? '日本' : '新加坡';
+    } else if (regionInfo.isHK || regionInfo.isJP || regionInfo.isSG || regionInfo.isVN) {
+      const regionName = regionInfo.isHK ? '香港' : regionInfo.isJP ? '日本' : regionInfo.isVN ? '越南' : '新加坡';
       logger.warn(`${regionName}站 nanobanana 模型固定使用1k清晰度。`);
     }
   }

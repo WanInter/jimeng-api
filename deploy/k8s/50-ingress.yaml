@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jimeng-api
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: jimeng-api
+  annotations:
+    cert-manager.io/cluster-issuer: __CERT_ISSUER__
+spec:
+  ingressClassName: __INGRESS_CLASS__
+  tls:
+    - hosts:
+        - __HOST__
+      secretName: __TLS_SECRET__
+  rules:
+    - host: __HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jimeng-api
+                port:
+                  number: 5100
