@@ -1,6 +1,6 @@
 # Jimeng API Server / Cluster Deployment Info
 
-更新时间：2026-06-20 CST
+更新时间：2026-06-23 CST
 
 ## 集群部署
 
@@ -15,8 +15,8 @@
 - Certificate：`certificate/jimeng-api-tls`，状态 `Ready=True`
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `longhorn`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
-- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-vn-region-20260620142444`
-- 当前镜像 digest：`sha256:e86b25e46c034af2a8f369bbf76095ced125049d8e41aa536106f5b04fa61440`
+- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-browser-signer-20260623230331`
+- 当前镜像 digest：`sha256:3b5b58a861266636453e0341c1507351c19cdd9fd3942bbdc2eb96a06ca34213`
 - 镜像仓库：`hub.cs.waypeak.work/jimeng-api/jimeng-api`
 - Kaniko 构建 Namespace：`jimeng-api-build`
 - Kaniko registry Secret：`jimeng-api-registry-auth`
@@ -57,6 +57,14 @@
 - 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-vn-region-20260620142444`
 - Digest：`sha256:e86b25e46c034af2a8f369bbf76095ced125049d8e41aa536106f5b04fa61440`
 - 已将当前测试账号从 `sg-` 前缀切换为 `vn-` 前缀。
+
+
+- 2026-06-23：部署页面 secsdk 复用签名器版本。受 Dreamina `shark not pass reject (-6)` 影响，受保护接口改为通过已打开页面的 secsdk/webmssdk 生成 `msToken`、`X-Bogus`、`X-Gnarly` 后再由服务端请求上游。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-browser-signer-20260623230331`
+- Digest：`sha256:3b5b58a861266636453e0341c1507351c19cdd9fd3942bbdc2eb96a06ca34213`
+- Deployment Ready：`1/1`
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`
+- 注意：该版本线上生成能力依赖可访问的 Dreamina 页面 CDP 签名环境；默认端口为 `DREAMINA_CDP_PORT` 或 `64896`。
 
 ## 关键文件
 
