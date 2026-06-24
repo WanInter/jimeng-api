@@ -98,7 +98,7 @@ function profileSearchText(profile: any): string {
 
 function parseProxyUrl(proxyUrl?: string | null): Partial<Record<string, any>> {
   const raw = String(proxyUrl || '').trim();
-  if (!raw) return { proxyMethod: 3 };
+  if (!raw) return { proxyMethod: 3, proxyType: 'noproxy' };
   try {
     const u = new URL(raw);
     const type = u.protocol.replace(':', '') || 'http';
@@ -154,7 +154,7 @@ export class BitBrowserClient {
     return res.data?.data?.list || [];
   }
 
-  async listAll(maxPages = 80, pageSize = Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 3)): Promise<any[]> {
+  async listAll(maxPages = 120, pageSize = Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 1)): Promise<any[]> {
     const all: any[] = [];
     for (let page = 1; page <= maxPages; page++) {
       const rows = await this.list(page, pageSize);
