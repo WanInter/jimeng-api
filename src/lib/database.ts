@@ -393,7 +393,14 @@ export function addAccount(name: string, token: string, region: string = 'cn', p
 }
 
 export function getAccounts() {
-  return db.prepare('SELECT id, name, token_preview, region, proxy_url, CASE WHEN cookie IS NOT NULL AND cookie != \'\' THEN 1 ELSE 0 END as has_cookie, credits_remaining, credits_total, status, last_check, created_at FROM jimeng_accounts ORDER BY created_at DESC').all();
+  return db.prepare(`
+    SELECT id, name, token_preview, region, proxy_url,
+           bitbrowser_profile_id, bitbrowser_window_id, cdp_port, cdp_ws_url,
+           login_username, login_status, last_login_at, last_login_error,
+           CASE WHEN cookie IS NOT NULL AND cookie != '' THEN 1 ELSE 0 END as has_cookie,
+           credits_remaining, credits_total, status, last_check, created_at
+    FROM jimeng_accounts ORDER BY created_at DESC
+  `).all();
 }
 
 /**
