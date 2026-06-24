@@ -93,7 +93,12 @@
 
       .action-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
       .action-bar h2 { font-size: 18px; }
-      .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+      .row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .advanced-actions { display: inline-block; position: relative; }
+      .advanced-actions summary { list-style: none; cursor: pointer; }
+      .advanced-actions summary::-webkit-details-marker { display: none; }
+      .advanced-actions[open] summary { border-color: var(--accent); color: var(--text-primary); }
+      .advanced-actions .advanced-menu { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; min-width: 180px; }
       .muted { color: var(--text-secondary); font-size: 12px; }
       .mono-small { font-family: "Monaco","Consolas",monospace; font-size: 12px; color: #93c5fd; }
       .account-sub { margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
@@ -228,7 +233,7 @@
       <!-- 即梦账号 Tab -->
       <div id="tab-accounts" class="tab-content">
         <div class="info-banner">
-          测试阶段可手动添加 <b>sessionid</b>；正式运行建议导入账号/密码并使用 BitBrowser 完成自动/半自动登录。未绑定 Profile 时，点击“打开/登录”会自动从 BitBrowser 列表中按账号邮箱/名称匹配并绑定；匹配不到时再手动绑定 Profile ID。海外区域前缀：美区 <code>us-</code>、港区 <code>hk-</code>、日区 <code>jp-</code>、新区 <code>sg-</code>、越南 <code>vn-</code>。
+          测试阶段可手动添加 <b>sessionid</b>；正式运行建议导入账号/密码并使用 BitBrowser 完成自动/半自动登录。日常只需使用 <b>登录/修复</b> 和 <b>检测</b>；绑定 Profile、仅打开窗口已收进高级操作。海外区域前缀：美区 <code>us-</code>、港区 <code>hk-</code>、日区 <code>jp-</code>、新区 <code>sg-</code>、越南 <code>vn-</code>。
         </div>
         <div class="action-bar">
           <h2>即梦账号管理</h2>
@@ -655,12 +660,17 @@ user3@example.com,password3"></textarea></div>
                 ${a.last_login_error ? `<div class="account-sub" title="${escapeHtml(a.last_login_error)}">${escapeHtml(a.last_login_error).slice(0, 24)}</div>` : ''}
               </td>
               <td class="row-actions">
-                <button class="btn btn-sm btn-ghost" onclick="checkAccount(${a.id})">查积分</button>
-                <button class="btn btn-sm btn-ghost" onclick="showBindProfileModal(${a.id}, '${escapeHtml(a.bitbrowser_profile_id || '')}')">绑定</button>
-                <button class="btn btn-sm btn-ghost" onclick="openBitBrowser(${a.id})">打开</button>
-                <button class="btn btn-sm" onclick="loginBitBrowser(${a.id})">登录</button>
+                <button class="btn btn-sm" onclick="loginBitBrowser(${a.id})">登录/修复</button>
                 <button class="btn btn-sm btn-warning" onclick="checkBitBrowserLogin(${a.id})">检测</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteAccount(${a.id})">删除</button>
+                <button class="btn btn-sm btn-ghost" onclick="checkAccount(${a.id})">查积分</button>
+                <details class="advanced-actions">
+                  <summary class="btn btn-sm btn-ghost">高级</summary>
+                  <div class="advanced-menu">
+                    <button class="btn btn-sm btn-ghost" onclick="showBindProfileModal(${a.id}, '${escapeHtml(a.bitbrowser_profile_id || '')}')">绑定 Profile</button>
+                    <button class="btn btn-sm btn-ghost" onclick="openBitBrowser(${a.id})">仅打开窗口</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteAccount(${a.id})">删除账号</button>
+                  </div>
+                </details>
               </td>
             </tr>`;
           }).join("");
@@ -767,8 +777,8 @@ user3@example.com,password3"></textarea></div>
           pendingActions.delete(key);
         }
       }
-      function openBitBrowser(id) { bitbrowserAction(id, "open", "BitBrowser 已打开"); }
-      function loginBitBrowser(id) { bitbrowserAction(id, "login", "登录流程已执行；如需验证码请人工处理后点检测"); }
+      function openBitBrowser(id) { bitbrowserAction(id, "open", "BitBrowser 窗口已打开"); }
+      function loginBitBrowser(id) { bitbrowserAction(id, "login", "登录/修复流程已启动；如需验证码请人工处理后点检测"); }
       function checkBitBrowserLogin(id) { bitbrowserAction(id, "check-login", "登录状态检测完成"); }
 
       function showAccountModal() {
