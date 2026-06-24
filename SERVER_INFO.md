@@ -15,8 +15,8 @@
 - Certificate：`certificate/jimeng-api-tls`，状态 `Ready=True`
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `longhorn`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
-- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-remote-bitbrowser-20260624094011`
-- 当前镜像 digest：`sha256:2159dd6787e28b1e8967f236fee567ef5d39d4c534e470e93cf584849aff328c`
+- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-ui-actions-20260624101925`
+- 当前镜像 digest：`sha256:b752719a5bf18900e42d4379e3de40e44a4ceaba55cd064b88aceb24ebb2a99a`
 - 镜像仓库：`hub.cs.waypeak.work/jimeng-api/jimeng-api`
 - Kaniko 构建 Namespace：`jimeng-api-build`
 - Kaniko registry Secret：`jimeng-api-registry-auth`
@@ -73,6 +73,14 @@
 - Deployment Ready：`1/1`
 - 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`，根路径返回 `即梦 API 管理控制台` HTML。
 - 使用说明：远程部署时在后台 `远程浏览器` 页面保存本地 BitBrowser API 地址，例如 `http://<bitbrowser-host>:54345`；本地机器需允许集群访问该 API 端口以及 `/browser/open` 返回的 CDP 端口。
+
+
+- 2026-06-24：部署账号操作按钮简化版本。账号行主操作收敛为 `登录/修复`、`检测`、`查积分`、`高级`；`绑定 Profile`、`仅打开窗口`、`删除账号` 移入高级操作，降低正式批量登录/检测流程误操作。远程浏览器设置仍只需填写 `BitBrowser API 地址`，CDP 继续由服务端自动推导。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-ui-actions-20260624101925`
+- Digest：`sha256:b752719a5bf18900e42d4379e3de40e44a4ceaba55cd064b88aceb24ebb2a99a`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-d78bbdb4d-zzh9q`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`。
+- 已验证根页面包含 `登录/修复`、`高级`、`远程 BitBrowser 设置`；Pod 可通过 Tailscale 访问本机 `http://100.103.52.37:54345/browser/list`。
 
 
 ## 远程 BitBrowser / Tailscale 连接
