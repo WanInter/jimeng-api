@@ -368,10 +368,29 @@ export default {
       const { id } = request.body;
       const account = db.getAccountById(Number(id));
       if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
-      const cdpPort = Number(account.cdp_port || process.env.DREAMINA_CDP_PORT || 0);
+      let cdpPort = Number(account.cdp_port || process.env.DREAMINA_CDP_PORT || 0);
+      let cdpWsUrl = account.cdp_ws_url || undefined;
+      let runningContext: any = null;
+      try {
+        runningContext = await discoverRunningDreaminaContext([account.cdp_port, process.env.DREAMINA_CDP_PORT]);
+        if (runningContext) {
+          cdpPort = runningContext.cdpPort;
+          cdpWsUrl = runningContext.pageWsUrl || cdpWsUrl;
+          if (runningContext.profileId || runningContext.cdpPort || runningContext.pageWsUrl) {
+            if (runningContext.profileId && !account.bitbrowser_profile_id) {
+              db.updateAccountBitBrowserProfile(Number(id), runningContext.profileId);
+            }
+            db.updateAccountBitBrowserRuntime(Number(id), {
+              cdp_port: runningContext.cdpPort,
+              cdp_ws_url: runningContext.pageWsUrl || '',
+              bitbrowser_window_id: runningContext.profileId || account.bitbrowser_profile_id || '',
+            });
+          }
+        }
+      } catch { /* ignore discovery failure and fallback to stored CDP */ }
       if (!cdpPort) return new Response({ error: '缺少 CDP 端口，请先打开 BitBrowser' }, { statusCode: 400 });
       try {
-        const result = await checkDreaminaLoginByCdp(cdpPort, account.cdp_ws_url || undefined);
+        const result = await checkDreaminaLoginByCdp(cdpPort, cdpWsUrl);
         if (result.cookies) {
           const sessionMatch = result.cookies.match(/(?:^|;\s*)sessionid=([^;]+)/);
           if (sessionMatch?.[1]) {
@@ -382,7 +401,7 @@ export default {
           }
         }
         db.updateAccountLoginStatus(Number(id), result.status, result.status === 'failed' ? '未检测到登录态 Cookie' : '');
-        return { success: result.status === 'ok', ...result };
+        return { success: result.status === 'ok', runningContext, ...result };
       } catch (e) {
         db.updateAccountLoginStatus(Number(id), 'failed', e.message);
         return new Response({ error: '检测失败: ' + e.message }, { statusCode: 500 });
