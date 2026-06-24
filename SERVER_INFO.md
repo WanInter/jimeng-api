@@ -1,6 +1,6 @@
 # Jimeng API Server / Cluster Deployment Info
 
-更新时间：2026-06-23 CST
+更新时间：2026-06-24 CST
 
 ## 集群部署
 
@@ -15,8 +15,8 @@
 - Certificate：`certificate/jimeng-api-tls`，状态 `Ready=True`
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `longhorn`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
-- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-browser-signer-20260623230331`
-- 当前镜像 digest：`sha256:3b5b58a861266636453e0341c1507351c19cdd9fd3942bbdc2eb96a06ca34213`
+- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-remote-bitbrowser-20260624094011`
+- 当前镜像 digest：`sha256:2159dd6787e28b1e8967f236fee567ef5d39d4c534e470e93cf584849aff328c`
 - 镜像仓库：`hub.cs.waypeak.work/jimeng-api/jimeng-api`
 - Kaniko 构建 Namespace：`jimeng-api-build`
 - Kaniko registry Secret：`jimeng-api-registry-auth`
@@ -65,6 +65,14 @@
 - Deployment Ready：`1/1`
 - 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`
 - 注意：该版本线上生成能力依赖可访问的 Dreamina 页面 CDP 签名环境；默认端口为 `DREAMINA_CDP_PORT` 或 `64896`。
+
+
+- 2026-06-24：部署远程 BitBrowser 编排版本。后台新增“远程浏览器”设置，仅需填写 `BitBrowser API 地址`；CDP 地址会根据 `/browser/open` 返回端口自动从 BitBrowser API host 推导。支持批量导入账号密码、自动/半自动登录、检测时持久化 CDP/Profile 绑定，以及账号级页面 secsdk 签名。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-remote-bitbrowser-20260624094011`
+- Digest：`sha256:2159dd6787e28b1e8967f236fee567ef5d39d4c534e470e93cf584849aff328c`
+- Deployment Ready：`1/1`
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`，根路径返回 `即梦 API 管理控制台` HTML。
+- 使用说明：远程部署时在后台 `远程浏览器` 页面保存本地 BitBrowser API 地址，例如 `http://<bitbrowser-host>:54345`；本地机器需允许集群访问该 API 端口以及 `/browser/open` 返回的 CDP 端口。
 
 ## 关键文件
 
