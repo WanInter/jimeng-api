@@ -21,6 +21,14 @@ export interface DreaminaLoginResult {
   userAgent?: string;
 }
 
+export interface RunningDreaminaContext {
+  cdpPort: number;
+  pageWsUrl?: string;
+  profileId?: string;
+  pageUrl?: string;
+  title?: string;
+}
+
 const DEFAULT_LOGIN_URL = "https://dreamina.capcut.com/ai-tool/generate";
 
 function getBaseUrl() {
@@ -67,10 +75,21 @@ export class BitBrowserClient {
     this.http = axios.create({ baseURL: baseUrl, timeout: 30000, validateStatus: () => true });
   }
 
-  async list(page = 1, pageSize = 100): Promise<any[]> {
+  async list(page = 1, pageSize = 20): Promise<any[]> {
     const res = await this.http.post("/browser/list", { page, pageSize });
     if (!res.data?.success) throw new Error(res.data?.msg || `BitBrowser list failed: ${res.status}`);
     return res.data?.data?.list || [];
+  }
+
+  async listAll(maxPages = 20, pageSize = 20): Promise<any[]> {
+    const all: any[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const rows = await this.list(page, pageSize);
+      if (!rows.length) break;
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+    }
+    return all;
   }
 
   async findProfileForAccount(account: { name?: string; login_username?: string; username?: string; token_preview?: string }): Promise<any | null> {
@@ -79,7 +98,7 @@ export class BitBrowserClient {
       .filter(v => v && v !== "unknown");
     if (!targets.length) return null;
 
-    const profiles = await this.list(1, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 500));
+    const profiles = await this.listAll(20, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 20));
 
     // 1. 优先精确匹配 name / userName。
     for (const profile of profiles) {
@@ -118,6 +137,42 @@ export class BitBrowserClient {
     if (!res.data?.success) throw new Error(res.data?.msg || `BitBrowser ${endpoint} failed: ${res.status}`);
     return res.data.data || res.data;
   }
+}
+
+function getCandidateCdpPorts(extra?: Array<number | string | null | undefined>): number[] {
+  const values = [
+    ...(extra || []),
+    process.env.DREAMINA_CDP_PORT,
+    process.env.BITBROWSER_CDP_PORT,
+    ...(process.env.BITBROWSER_CDP_PORTS || '').split(',')
+  ];
+  if (!values.some(v => String(v || '').trim() === '64896')) values.push('64896');
+  return [...new Set(values.map(v => Number(String(v || '').trim())).filter(v => Number.isInteger(v) && v > 0 && v < 65536))];
+}
+
+export async function discoverRunningDreaminaContext(extraPorts: Array<number | string | null | undefined> = []): Promise<RunningDreaminaContext | null> {
+  for (const port of getCandidateCdpPorts(extraPorts)) {
+    try {
+      const tabs = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()) as any[];
+      const dreaminaPage = tabs.find(t => t.type === 'page' && String(t.url || '').includes('dreamina.capcut.com'));
+      if (!dreaminaPage) continue;
+      const workbench = tabs.find(t => t.type === 'page' && String(t.url || '').includes('console.bitbrowser.net'));
+      let profileId: string | undefined;
+      if (workbench?.url) {
+        try { profileId = new URL(workbench.url).searchParams.get('id') || undefined; } catch {}
+      }
+      return {
+        cdpPort: port,
+        pageWsUrl: dreaminaPage.webSocketDebuggerUrl,
+        profileId,
+        pageUrl: dreaminaPage.url,
+        title: dreaminaPage.title,
+      };
+    } catch {
+      // Port is not a CDP endpoint, ignore.
+    }
+  }
+  return null;
 }
 
 async function waitForPageWs(port: number, timeoutMs = 60000): Promise<string> {

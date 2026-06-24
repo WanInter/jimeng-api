@@ -7,7 +7,7 @@ import HTTP_STATUS_CODES from '@/lib/http-status-codes.ts';
 import db from '@/lib/database.ts';
 import { getCredit, request as jimengRequest } from '@/api/controllers/core.ts';
 import { triggerHealthCheck, triggerCreditsSync } from '@/lib/account-keeper.ts';
-import BitBrowserClient, { checkDreaminaLoginByCdp, loginDreaminaViaBitBrowser } from '@/lib/bitbrowser.ts';
+import BitBrowserClient, { checkDreaminaLoginByCdp, discoverRunningDreaminaContext, loginDreaminaViaBitBrowser } from '@/lib/bitbrowser.ts';
 
 // 验证登录状态的辅助函数
 function getSessionUserId(request: Request): number | null {
@@ -37,14 +37,30 @@ function parseLoginAccountLines(raw: string): any[] {
   }).filter(Boolean);
 }
 
-async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any }> {
+async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any; runningContext?: any }> {
   if (account.bitbrowser_profile_id) return { profileId: account.bitbrowser_profile_id, autoBound: false };
+
+  // 1) 先按账号邮箱/名称匹配 BitBrowser profile 列表。
   const matched = await client.findProfileForAccount(account);
-  if (!matched?.id) {
-    throw new Error(`账号未绑定 BitBrowser profile，且未能按名称/登录账号自动匹配。请在 BitBrowser 中创建名称为 ${account.login_username || account.name} 的窗口，或手动绑定 Profile ID。`);
+  if (matched?.id) {
+    db.updateAccountBitBrowserProfile(Number(account.id), String(matched.id));
+    return { profileId: String(matched.id), autoBound: true, matchedProfile: matched };
   }
-  db.updateAccountBitBrowserProfile(Number(account.id), String(matched.id));
-  return { profileId: String(matched.id), autoBound: true, matchedProfile: matched };
+
+  // 2) 再扫描已经运行的 BitBrowser/CDP 窗口：如果打开了 Dreamina 页面，
+  //    从 BitBrowser 工作台 URL 中提取 profile id，并顺便记录 CDP 端口。
+  const running = await discoverRunningDreaminaContext([account.cdp_port]);
+  if (running?.profileId) {
+    db.updateAccountBitBrowserProfile(Number(account.id), running.profileId);
+    db.updateAccountBitBrowserRuntime(Number(account.id), {
+      cdp_port: running.cdpPort,
+      cdp_ws_url: running.pageWsUrl || '',
+      bitbrowser_window_id: running.profileId,
+    });
+    return { profileId: running.profileId, autoBound: true, runningContext: running };
+  }
+
+  throw new Error(`账号未绑定 BitBrowser profile，且未能自动匹配。请确认 BitBrowser 中已有名称为 ${account.login_username || account.name} 的窗口，或已有窗口正在打开 dreamina.capcut.com，或手动绑定 Profile ID。`);
 }
 
 export default {
@@ -287,7 +303,7 @@ export default {
           cdp_ws_url: '',
           bitbrowser_window_id: resolved.profileId
         });
-        return { success: true, autoBound: resolved.autoBound, matchedProfile: resolved.matchedProfile ? { id: resolved.matchedProfile.id, name: resolved.matchedProfile.name, seq: resolved.matchedProfile.seq } : undefined, data: opened };
+        return { success: true, autoBound: resolved.autoBound, matchedProfile: resolved.matchedProfile ? { id: resolved.matchedProfile.id, name: resolved.matchedProfile.name, seq: resolved.matchedProfile.seq } : undefined, runningContext: resolved.runningContext, data: opened };
       } catch (e) {
         db.updateAccountLoginStatus(Number(id), 'failed', e.message);
         return new Response({ error: '打开 BitBrowser 失败: ' + e.message }, { statusCode: 500 });
