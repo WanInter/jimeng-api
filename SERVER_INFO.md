@@ -74,6 +74,18 @@
 - 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`，根路径返回 `即梦 API 管理控制台` HTML。
 - 使用说明：远程部署时在后台 `远程浏览器` 页面保存本地 BitBrowser API 地址，例如 `http://<bitbrowser-host>:54345`；本地机器需允许集群访问该 API 端口以及 `/browser/open` 返回的 CDP 端口。
 
+
+## 远程 BitBrowser / Tailscale 连接
+
+- 本机 BitBrowser Tailscale IP：`100.103.52.37`
+- 线上后台 `远程浏览器` 设置已写入：`BitBrowser API 地址 = http://100.103.52.37:54345`
+- CDP 地址无需手动配置：服务调用 `/browser/open` 时会附加 `--remote-debugging-address=0.0.0.0`，并根据返回端口自动推导 `http://100.103.52.37:<cdp-port>`。
+- 已验证远程 k3s 节点和 `jimeng-api` Pod 可访问：
+  - `http://100.103.52.37:54345/browser/list`
+  - `/browser/open` 返回的 CDP 端口，例如 `http://100.103.52.37:59186/json/version`
+- 已加入 Tailscale 的 k3s 节点：`node196=100.71.5.102`、`node4=100.100.223.4`、`node53=100.74.68.124`、`node2/company=100.83.241.120`、`node204=100.94.246.89`、`node224=100.67.198.35`。
+- 安全注意：BitBrowser API/CDP 仅通过 Tailscale IP 使用，不建议暴露到公网。
+
 ## 关键文件
 
 ```text
