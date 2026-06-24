@@ -870,18 +870,11 @@ export function tokenSplit(authorization: string) {
  */
 export async function getTokenLiveStatus(refreshToken: string) {
   try {
-    const result = await request(
-      "POST",
-      "/passport/account/info/v2",
-      refreshToken,
-      {
-        params: {
-          account_sdk_source: "web",
-        },
-      }
-    );
-    // request 内部已调用 checkResult，直接使用返回值
-    return !!result?.user_id;
+    // Dreamina 的 /passport/account/info/v2 在当前国际版链路中会返回 404，
+    // 容易把实际可生成/可查积分的账号误判为 warning/expired。
+    // 这里改用积分接口作为存活依据：能成功返回积分结构即认为 Cookie/Token 仍可用。
+    const credit = await getCredit(refreshToken);
+    return Number.isFinite(Number(credit?.totalCredit));
   } catch (err) {
     return false;
   }
