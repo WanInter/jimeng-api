@@ -55,6 +55,20 @@ function cdpBaseFromBitBrowserApi(bitbrowserApiBase: string, cdpPort: number): s
   return `${api.protocol}//${api.hostname}:${cdpPort}`;
 }
 
+function getOpenArgs(): string[] {
+  const raw = process.env.BITBROWSER_OPEN_ARGS || db.getSetting('bitbrowser_open_args', '');
+  const args = raw
+    ? raw.split(/\s*,\s*/).map(v => v.trim()).filter(Boolean)
+    : [];
+
+  // For remote API deployments, CDP must listen on a non-loopback address;
+  // otherwise /browser/open returns a port that is only reachable from the BitBrowser machine itself.
+  if (!args.some(a => a.startsWith('--remote-debugging-address='))) {
+    args.push('--remote-debugging-address=0.0.0.0');
+  }
+  return args;
+}
+
 async function hasDreaminaPage(cdpBase: string): Promise<boolean> {
   try {
     const tabs = await fetch(`${cdpBase.replace(/\/$/, "")}/json/list`).then(r => r.json()) as any[];
@@ -165,7 +179,7 @@ export class BitBrowserClient {
 
   async open(id: string): Promise<BitBrowserOpenResult> {
     if (!id) throw new Error("BitBrowser profile id is required");
-    const res = await this.http.post("/browser/open", { id });
+    const res = await this.http.post("/browser/open", { id, args: getOpenArgs() });
     if (!res.data?.success) throw new Error(res.data?.msg || `BitBrowser open failed: ${res.status}`);
     const data = res.data.data || {};
     return { ...data, cdpPort: extractPort(data), raw: res.data };
