@@ -100,20 +100,31 @@ function profileSearchText(profile: any): string {
 function parseProxyUrl(proxyUrl?: string | null): Partial<Record<string, any>> {
   const raw = String(proxyUrl || '').trim();
   if (!raw) return { proxyMethod: 3, proxyType: 'noproxy' };
-  try {
-    const u = new URL(raw);
-    const type = u.protocol.replace(':', '') || 'http';
-    return {
-      proxyMethod: 2,
-      proxyType: type === 'https' ? 'http' : type,
-      host: u.hostname,
-      port: Number(u.port || (type === 'https' ? 443 : 80)),
-      proxyUserName: decodeURIComponent(u.username || ''),
-      proxyPassword: decodeURIComponent(u.password || ''),
-    };
-  } catch {
-    return { proxyMethod: 3, remark: `Invalid proxy_url ignored: ${raw.slice(0, 80)}` };
+
+  // Support both standard URL form and the imported shorthand form:
+  //   http://user:pass@host:port
+  //   user:pass@host:port
+  const candidates = /^https?:\/\//i.test(raw) ? [raw] : [`http://${raw}`, raw];
+  for (const candidate of candidates) {
+    try {
+      const u = new URL(candidate);
+      const type = u.protocol.replace(':', '') || 'http';
+      if (!u.hostname || !u.port) continue;
+      return {
+        proxyMethod: 2,
+        proxyType: type === 'https' ? 'http' : type,
+        host: u.hostname,
+        port: Number(u.port || (type === 'https' ? 443 : 80)),
+        proxyUserName: decodeURIComponent(u.username || ''),
+        proxyPassword: decodeURIComponent(u.password || ''),
+      };
+    } catch {
+      // Try next candidate.
+    }
   }
+
+  // BitBrowser requires proxyType even when falling back to no-proxy.
+  return { proxyMethod: 3, proxyType: 'noproxy', remark: `Invalid proxy_url ignored: ${raw.slice(0, 80)}` };
 }
 
 function buildCreateProfilePayload(account: { name?: string; login_username?: string; username?: string; proxy_url?: string; region?: string }): any {
