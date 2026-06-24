@@ -9,6 +9,8 @@ import { getCredit, request as jimengRequest } from '@/api/controllers/core.ts';
 import { triggerHealthCheck, triggerCreditsSync } from '@/lib/account-keeper.ts';
 import BitBrowserClient, { checkDreaminaLoginByCdp, discoverRunningDreaminaContext, loginDreaminaViaBitBrowser } from '@/lib/bitbrowser.ts';
 
+const loginTasks = new Set<number>();
+
 // 验证登录状态的辅助函数
 function getSessionUserId(request: Request): number | null {
   const sessionId = request.headers.cookie?.match(/session=([^;]+)/)?.[1];
@@ -310,42 +312,54 @@ export default {
       }
     },
 
-    // 自动/半自动登录 Dreamina。遇到验证码会返回 need_2fa，人工完成后调用 check-login。
+    // 自动/半自动登录 Dreamina。耗时较长，作为后台任务启动；遇到验证码后人工完成再调用 check-login。
     '/accounts/bitbrowser/login': async (request: Request) => {
       requireAuth(request);
       const { id } = request.body;
       const account = db.getAccountById(Number(id));
       if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
-      try {
-        db.updateAccountLoginStatus(Number(id), 'logging_in');
-        const client = new BitBrowserClient();
-        const resolved = await resolveBitBrowserProfile(account, client);
-        const result = await loginDreaminaViaBitBrowser({
-          bitbrowserProfileId: resolved.profileId,
-          username: account.login_username,
-          password: db.decryptSecret(account.login_password || ''),
-        });
-        db.updateAccountBitBrowserRuntime(Number(id), {
-          cdp_port: result.cdpPort || 0,
-          cdp_ws_url: result.cdpWsUrl || '',
-          bitbrowser_window_id: resolved.profileId,
-          user_agent: result.userAgent || ''
-        });
-        if (result.cookies) {
-          const sessionMatch = result.cookies.match(/(?:^|;\s*)sessionid=([^;]+)/);
-          if (sessionMatch?.[1]) {
-            const token = `${account.region || 'vn'}-${sessionMatch[1]}`;
-            db.updateAccountTokenAndCookie(Number(id), token, result.cookies);
-          } else {
-            db.updateAccountCookie(Number(id), result.cookies);
-          }
-        }
-        db.updateAccountLoginStatus(Number(id), result.status, result.status === 'failed' ? (result.message || '登录未确认') : '');
-        return { success: result.status !== 'failed', autoBound: resolved.autoBound, ...result };
-      } catch (e) {
-        db.updateAccountLoginStatus(Number(id), 'failed', e.message);
-        return new Response({ error: '登录失败: ' + e.message }, { statusCode: 500 });
+      const accountId = Number(id);
+      if (loginTasks.has(accountId)) {
+        return new Response({ error: '该账号登录流程正在执行，请等待完成后再试' }, { statusCode: 409 });
       }
+
+      loginTasks.add(accountId);
+      db.updateAccountLoginStatus(accountId, 'logging_in');
+
+      // 不阻塞 HTTP 请求：浏览器登录可能等待页面加载/验证码/跳转，前端通过账号列表状态观察结果。
+      (async () => {
+        try {
+          const client = new BitBrowserClient();
+          const resolved = await resolveBitBrowserProfile(account, client);
+          const result = await loginDreaminaViaBitBrowser({
+            bitbrowserProfileId: resolved.profileId,
+            username: account.login_username,
+            password: db.decryptSecret(account.login_password || ''),
+          });
+          db.updateAccountBitBrowserRuntime(accountId, {
+            cdp_port: result.cdpPort || 0,
+            cdp_ws_url: result.cdpWsUrl || '',
+            bitbrowser_window_id: resolved.profileId,
+            user_agent: result.userAgent || ''
+          });
+          if (result.cookies) {
+            const sessionMatch = result.cookies.match(/(?:^|;\s*)sessionid=([^;]+)/);
+            if (sessionMatch?.[1]) {
+              const token = `${account.region || 'vn'}-${sessionMatch[1]}`;
+              db.updateAccountTokenAndCookie(accountId, token, result.cookies);
+            } else {
+              db.updateAccountCookie(accountId, result.cookies);
+            }
+          }
+          db.updateAccountLoginStatus(accountId, result.status, result.status === 'failed' ? (result.message || '登录未确认') : '');
+        } catch (e) {
+          db.updateAccountLoginStatus(accountId, 'failed', e.message);
+        } finally {
+          loginTasks.delete(accountId);
+        }
+      })();
+
+      return { success: true, pending: true, message: '登录任务已启动，请观察账号列表状态；如出现验证码，请在 BitBrowser 中人工完成后点击“检测”。' };
     },
 
     // 检测当前 BitBrowser 页面登录状态；人工处理验证码后使用

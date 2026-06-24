@@ -393,6 +393,7 @@ user3@example.com,password3"></textarea></div>
       let currentMediaType = "";
       let autoRefreshInterval;
       const API_BASE = location.origin;
+      const pendingActions = new Set();
 
       // ===== 通用工具 =====
       function escapeHtml(str) {
@@ -405,6 +406,15 @@ user3@example.com,password3"></textarea></div>
         el.textContent = msg;
         el.className = "toast show " + type;
         setTimeout(() => { el.className = "toast " + type; }, 2500);
+      }
+      function toastSticky(msg, type = "success") {
+        const el = document.getElementById("toast");
+        el.textContent = msg;
+        el.className = "toast show " + type;
+      }
+      function hideToast() {
+        const el = document.getElementById("toast");
+        el.className = "toast";
       }
       function copyText(text) {
         navigator.clipboard.writeText(text).then(
@@ -630,21 +640,45 @@ user3@example.com,password3"></textarea></div>
         } catch (e) { errorEl.textContent = "请求失败"; }
       }
       async function bitbrowserAction(id, action, okMsg) {
-        toast("正在执行 " + action + " ...");
+        const key = `${action}:${id}`;
+        if (pendingActions.has(key)) {
+          toast("该操作正在执行，请等待结果", "error");
+          return;
+        }
+        pendingActions.add(key);
+        const actionNames = { open: "打开 BitBrowser", login: "登录 Dreamina", "check-login": "检测登录状态" };
+        toastSticky(`正在执行：${actionNames[action] || action}，请稍候...`);
+        const controller = new AbortController();
+        const timeoutMs = action === "login" ? 150000 : 60000;
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const res = await api(`/dashboard/accounts/bitbrowser/${action}`, {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id }),
+            body: JSON.stringify({ id }), signal: controller.signal,
           });
-          const data = await res.json();
+          clearTimeout(timeout);
+          const data = await res.json().catch(() => ({}));
           if (res.ok && data.success !== false) {
-            toast((data.autoBound ? "已自动匹配并绑定 Profile；" : "") + (okMsg || "操作完成"));
+            toast((data.autoBound ? "已自动匹配并绑定 Profile；" : "") + (data.message || okMsg || "操作完成"));
+            if (data.pending) {
+              setTimeout(loadAccounts, 1000);
+              setTimeout(loadAccounts, 5000);
+              setTimeout(loadAccounts, 15000);
+              setTimeout(loadAccounts, 45000);
+            }
           } else {
-            toast((data.error || data.message || "操作失败"), "error");
+            toast((data.error || data.message || `操作失败 HTTP ${res.status}`), "error");
           }
           loadAccounts();
           return data;
-        } catch (e) { toast("请求失败: " + e.message, "error"); }
+        } catch (e) {
+          clearTimeout(timeout);
+          if (e.name === "AbortError") toast("操作超时：登录可能仍在浏览器中进行，请稍后点“检测”", "error");
+          else toast("请求失败: " + e.message, "error");
+          loadAccounts();
+        } finally {
+          pendingActions.delete(key);
+        }
       }
       function openBitBrowser(id) { bitbrowserAction(id, "open", "BitBrowser 已打开"); }
       function loginBitBrowser(id) { bitbrowserAction(id, "login", "登录流程已执行；如需验证码请人工处理后点检测"); }
