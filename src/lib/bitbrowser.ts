@@ -130,7 +130,7 @@ export class BitBrowserClient {
     return null;
   }
 
-  async detectDreaminaCdpBase(): Promise<{ cdpBase: string; profileId?: string; cdpPort: number; opened: BitBrowserOpenResult }> {
+  async detectDreaminaCdpBase(): Promise<{ cdpBase: string; profileId?: string; cdpPort: number; opened: BitBrowserOpenResult; hasDreaminaPage: boolean; warning?: string }> {
     const profiles = await this.listAll(20, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 20));
     const candidates = [
       ...profiles.filter(p => Number(p.status) === 1),
@@ -138,20 +138,29 @@ export class BitBrowserClient {
     ];
 
     let lastError: any;
+    let firstReachable: { cdpBase: string; profileId?: string; cdpPort: number; opened: BitBrowserOpenResult; hasDreaminaPage: boolean; warning?: string } | null = null;
+
     for (const profile of candidates) {
       try {
         const opened = await this.open(String(profile.id));
         if (!opened.cdpPort) continue;
         const cdpBase = cdpBaseFromBitBrowserApi(this.http.defaults.baseURL || getBaseUrl(), opened.cdpPort);
-        if (await hasDreaminaPage(cdpBase)) {
-          return { cdpBase, profileId: String(profile.id), cdpPort: opened.cdpPort, opened };
+        const dreamina = await hasDreaminaPage(cdpBase);
+        const result = { cdpBase, profileId: String(profile.id), cdpPort: opened.cdpPort, opened, hasDreaminaPage: dreamina };
+        if (dreamina) return result;
+        if (!firstReachable) {
+          firstReachable = {
+            ...result,
+            warning: "已检测到可访问的 CDP，但该窗口当前未打开 Dreamina 页面；保存后请在账号页点击“登录”或手动打开 dreamina.capcut.com。",
+          };
         }
       } catch (e) {
         lastError = e;
       }
     }
 
-    throw new Error(lastError?.message || "未检测到打开 Dreamina 页面的 BitBrowser CDP，请先在 BitBrowser 中打开 dreamina.capcut.com 页面");
+    if (firstReachable) return firstReachable;
+    throw new Error(lastError?.message || "未检测到可访问的 BitBrowser CDP。请确认远程服务器可访问 BitBrowser 返回的 CDP 端口，而不仅是 54345。");
   }
 
   async open(id: string): Promise<BitBrowserOpenResult> {

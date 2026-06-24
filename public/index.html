@@ -587,7 +587,12 @@ user3@example.com,password3"></textarea></div>
           const data = await res.json();
           if (res.ok && data.success) {
             document.getElementById("browser-cdp-base").value = data.dreamina_cdp_base || "";
-            toast(`检测成功：CDP ${data.dreamina_cdp_base}`);
+            if (data.warning) {
+              errorEl.textContent = data.warning;
+              toast("已检测到 CDP，但当前未打开 Dreamina 页面", "error");
+            } else {
+              toast(`检测成功：CDP ${data.dreamina_cdp_base}`);
+            }
           } else {
             toast(data.error || "检测失败", "error");
             errorEl.textContent = data.error || "检测失败";

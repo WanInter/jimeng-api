@@ -212,7 +212,7 @@ export default {
       try {
         const client = new BitBrowserClient(bitbrowser_api_base);
         const detected = await client.detectDreaminaCdpBase();
-        return { success: true, dreamina_cdp_base: detected.cdpBase, profile_id: detected.profileId, cdp_port: detected.cdpPort };
+        return { success: true, dreamina_cdp_base: detected.cdpBase, profile_id: detected.profileId, cdp_port: detected.cdpPort, has_dreamina_page: detected.hasDreaminaPage, warning: detected.warning || '' };
       } catch (e) {
         return new Response({ error: '自动检测失败: ' + e.message }, { statusCode: 500 });
       }
