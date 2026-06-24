@@ -223,11 +223,14 @@ export default {
       requireAuth(request);
       const bitbrowser_api_base = String(request.body.bitbrowser_api_base || '').trim();
       const dreamina_cdp_base = String(request.body.dreamina_cdp_base || '').trim();
-      if (!bitbrowser_api_base || !dreamina_cdp_base) {
-        return new Response({ error: 'BitBrowser API 地址和 Dreamina CDP 地址均不能为空' }, { statusCode: 400 });
+      if (!bitbrowser_api_base) {
+        return new Response({ error: 'BitBrowser API 地址不能为空' }, { statusCode: 400 });
       }
-      if (!/^https?:\/\//i.test(bitbrowser_api_base) || !/^https?:\/\//i.test(dreamina_cdp_base)) {
-        return new Response({ error: '地址必须以 http:// 或 https:// 开头' }, { statusCode: 400 });
+      if (!/^https?:\/\//i.test(bitbrowser_api_base)) {
+        return new Response({ error: 'BitBrowser API 地址必须以 http:// 或 https:// 开头' }, { statusCode: 400 });
+      }
+      if (dreamina_cdp_base && !/^https?:\/\//i.test(dreamina_cdp_base)) {
+        return new Response({ error: 'Dreamina CDP 地址必须以 http:// 或 https:// 开头' }, { statusCode: 400 });
       }
       db.updateRemoteBrowserSettings({ bitbrowser_api_base, dreamina_cdp_base });
       return { success: true, message: '远程浏览器设置已保存' };

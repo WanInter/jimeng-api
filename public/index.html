@@ -248,7 +248,7 @@
       <!-- 远程浏览器 Tab -->
       <div id="tab-browser" class="tab-content">
         <div class="info-banner">
-只需填写 BitBrowser API 地址；Dreamina CDP 地址可根据已打开的 BitBrowser/Dreamina 窗口自动检测。
+只需填写 BitBrowser API 地址。CDP 地址会在打开/登录 BitBrowser Profile 后自动从返回端口推导，无需手动配置。
         </div>
         <div class="table-container" style="padding:20px; max-width:760px;">
           <h2 style="font-size:18px;margin-bottom:16px;">远程 BitBrowser / CDP 设置</h2>
@@ -257,14 +257,17 @@
             <input type="text" id="browser-bitbrowser-api" placeholder="http://本地机器IP:54345" />
             <div class="muted" style="margin-top:6px;">用于打开窗口、查询 Profile，例如 http://1.2.3.4:54345</div>
           </div>
-          <div class="form-group">
-            <label>Dreamina CDP 地址（自动检测，可手动改）</label>
-            <input type="text" id="browser-cdp-base" placeholder="http://本地机器IP:64896" />
-            <div class="muted" style="margin-top:6px;">用于页面签名和登录检测，例如 http://1.2.3.4:64896</div>
-          </div>
+          <details style="margin-bottom:16px;">
+            <summary class="muted" style="cursor:pointer;">高级：手动覆盖 Dreamina CDP 地址（通常无需填写）</summary>
+            <div class="form-group" style="margin-top:12px;">
+              <label>Dreamina CDP 地址（可选）</label>
+              <input type="text" id="browser-cdp-base" placeholder="留空自动推导，例如 http://本地机器IP:64896" />
+              <div class="muted" style="margin-top:6px;">留空时，会根据 BitBrowser API 地址和 /browser/open 返回的端口自动推导。</div>
+            </div>
+          </details>
           <div class="row-actions">
             <button class="btn btn-sm" onclick="saveBrowserSettings()">保存设置</button>
-            <button class="btn btn-sm btn-ghost" onclick="detectCdpBase()">自动检测 CDP</button>
+            <button class="btn btn-sm btn-ghost" onclick="detectCdpBase()">测试/自动检测 CDP</button>
             <button class="btn btn-sm btn-ghost" onclick="loadBrowserSettings()">刷新</button>
           </div>
           <div id="browser-settings-error" class="error-msg" style="text-align:left"></div>
@@ -612,10 +615,7 @@ user3@example.com,password3"></textarea></div>
           errorEl.textContent = "BitBrowser API 地址为必填项";
           return;
         }
-        if (!dreamina_cdp_base) {
-          errorEl.textContent = "请先点击“自动检测 CDP”，或手动填写 Dreamina CDP 地址";
-          return;
-        }
+        // Dreamina CDP 地址可留空，后端会根据 BitBrowser API host + open 返回端口自动推导。
         try {
           const res = await api("/dashboard/browser-settings", {
             method: "POST", headers: { "Content-Type": "application/json" },

@@ -7,9 +7,22 @@ let msgId = 1;
 export function getCdpHttpBase(port?: string | number | null): string {
   const configuredBase = process.env.DREAMINA_CDP_BASE || db.getSetting('dreamina_cdp_base', '');
   if (configuredBase) return configuredBase.replace(/\/$/, "");
+
+  const cdpPort = String(port || process.env.DREAMINA_CDP_PORT || "64896");
+
+  // If only BitBrowser API is configured, derive CDP host/scheme from it.
+  // BitBrowser /browser/open returns a local CDP port; on a remote BitBrowser
+  // machine the CDP is normally exposed on the same host as the API.
+  const bitbrowserApiBase = process.env.BITBROWSER_API_BASE || db.getSetting('bitbrowser_api_base', '');
+  if (!process.env.DREAMINA_CDP_HOST && bitbrowserApiBase) {
+    try {
+      const api = new URL(bitbrowserApiBase);
+      return `${api.protocol}//${api.hostname}:${cdpPort}`;
+    } catch { /* fallback below */ }
+  }
+
   const host = process.env.DREAMINA_CDP_HOST || "127.0.0.1";
   const scheme = process.env.DREAMINA_CDP_SCHEME || "http";
-  const cdpPort = String(port || process.env.DREAMINA_CDP_PORT || "64896");
   return `${scheme}://${host}:${cdpPort}`;
 }
 
@@ -20,7 +33,8 @@ export function rewriteCdpWsUrl(wsUrl: string, port?: string | number | null): s
     return `${process.env.DREAMINA_CDP_WS_BASE.replace(/\/$/, "")}${path}`;
   }
   const configuredBase = process.env.DREAMINA_CDP_BASE || db.getSetting('dreamina_cdp_base', '');
-  if (!configuredBase && !process.env.DREAMINA_CDP_HOST) return wsUrl;
+  const bitbrowserApiBase = process.env.BITBROWSER_API_BASE || db.getSetting('bitbrowser_api_base', '');
+  if (!configuredBase && !process.env.DREAMINA_CDP_HOST && !bitbrowserApiBase) return wsUrl;
   const base = new URL(getCdpHttpBase(port));
   const u = new URL(wsUrl);
   u.protocol = base.protocol === "https:" ? "wss:" : "ws:";
