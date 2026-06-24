@@ -154,7 +154,7 @@ export class BitBrowserClient {
     return res.data?.data?.list || [];
   }
 
-  async listAll(maxPages = 20, pageSize = 20): Promise<any[]> {
+  async listAll(maxPages = 80, pageSize = Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 3)): Promise<any[]> {
     const all: any[] = [];
     for (let page = 1; page <= maxPages; page++) {
       const rows = await this.list(page, pageSize);
@@ -171,7 +171,7 @@ export class BitBrowserClient {
       .filter(v => v && v !== "unknown");
     if (!targets.length) return null;
 
-    const profiles = await this.listAll(20, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 20));
+    const profiles = await this.listAll();
 
     // 1. 优先精确匹配 name / userName。
     for (const profile of profiles) {
@@ -189,7 +189,7 @@ export class BitBrowserClient {
   }
 
   async detectDreaminaCdpBase(): Promise<{ cdpBase: string; profileId?: string; cdpPort: number; opened: BitBrowserOpenResult; hasDreaminaPage: boolean; warning?: string }> {
-    const profiles = await this.listAll(20, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 20));
+    const profiles = await this.listAll();
     const candidates = [
       ...profiles.filter(p => Number(p.status) === 1),
       ...profiles.filter(p => Number(p.status) !== 1),
@@ -238,18 +238,11 @@ export class BitBrowserClient {
   async createOrUpdate(input: any): Promise<any> {
     // BitBrowser 本地 API 的新增/更新接口在不同版本里字段要求不同。
     // 这里提供透传封装：调用方传完整 browserFingerPrint / proxy 等 payload。
-    const endpoints = input.id
-      ? ["/browser/update"]
-      : [process.env.BITBROWSER_CREATE_ENDPOINT || "/browser/update", "/browser/add"]
-          .filter((v, i, a) => v && a.indexOf(v) === i);
-
-    let lastError = '';
-    for (const endpoint of endpoints) {
-      const res = await this.http.post(endpoint, input);
-      if (res.data?.success) return res.data.data || res.data;
-      lastError = res.data?.msg || res.data?.message || `BitBrowser ${endpoint} failed: ${res.status}`;
-    }
-    throw new Error(lastError || 'BitBrowser create/update failed');
+    const endpoint = input.id ? "/browser/update" : (process.env.BITBROWSER_CREATE_ENDPOINT || "/browser/update");
+    const res = await this.http.post(endpoint, input);
+    if (res.data?.success) return res.data.data || res.data;
+    const detail = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data || '');
+    throw new Error(res.data?.msg || res.data?.message || `BitBrowser ${endpoint} failed: ${res.status}${detail ? ` ${detail}` : ''}`);
   }
 
   async createProfileForAccount(account: { name?: string; login_username?: string; username?: string; proxy_url?: string; region?: string }): Promise<any> {
