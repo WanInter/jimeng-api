@@ -120,6 +120,12 @@ export default {
       return db.getAccounts();
     },
 
+    // 获取远程 BitBrowser/CDP 设置
+    '/browser-settings': async (request: Request) => {
+      requireAuth(request);
+      return db.getRemoteBrowserSettings();
+    },
+
     // 获取API Key列表
     '/api-keys': async (request: Request) => {
       requireAuth(request);
@@ -191,6 +197,21 @@ export default {
       }
       db.changePassword(userId, newPassword);
       return { success: true, message: '密码修改成功' };
+    },
+
+    // 保存远程 BitBrowser/CDP 设置（页面只暴露必须项）
+    '/browser-settings': async (request: Request) => {
+      requireAuth(request);
+      const bitbrowser_api_base = String(request.body.bitbrowser_api_base || '').trim();
+      const dreamina_cdp_base = String(request.body.dreamina_cdp_base || '').trim();
+      if (!bitbrowser_api_base || !dreamina_cdp_base) {
+        return new Response({ error: 'BitBrowser API 地址和 Dreamina CDP 地址均不能为空' }, { statusCode: 400 });
+      }
+      if (!/^https?:\/\//i.test(bitbrowser_api_base) || !/^https?:\/\//i.test(dreamina_cdp_base)) {
+        return new Response({ error: '地址必须以 http:// 或 https:// 开头' }, { statusCode: 400 });
+      }
+      db.updateRemoteBrowserSettings({ bitbrowser_api_base, dreamina_cdp_base });
+      return { success: true, message: '远程浏览器设置已保存' };
     },
 
     // 添加即梦账号

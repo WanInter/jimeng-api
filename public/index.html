@@ -195,6 +195,7 @@
       <div class="tabs">
         <button class="tab-btn active" data-tab="stats">📊 统计信息</button>
         <button class="tab-btn" data-tab="accounts">👤 即梦账号</button>
+        <button class="tab-btn" data-tab="browser">🌐 远程浏览器</button>
         <button class="tab-btn" data-tab="apikeys">🔑 API Key</button>
         <button class="tab-btn" data-tab="apidoc">📖 API 文档</button>
         <button class="tab-btn" data-tab="logs">📋 实时日志</button>
@@ -244,6 +245,31 @@
           </table>
         </div>
       </div>
+      <!-- 远程浏览器 Tab -->
+      <div id="tab-browser" class="tab-content">
+        <div class="info-banner">
+          只填写远程服务连接本地 BitBrowser 所需的两个必填项。本地机器需允许远程服务器访问这两个地址。
+        </div>
+        <div class="table-container" style="padding:20px; max-width:760px;">
+          <h2 style="font-size:18px;margin-bottom:16px;">远程 BitBrowser / CDP 设置</h2>
+          <div class="form-group">
+            <label>BitBrowser API 地址（必填）</label>
+            <input type="text" id="browser-bitbrowser-api" placeholder="http://本地机器IP:54345" />
+            <div class="muted" style="margin-top:6px;">用于打开窗口、查询 Profile，例如 http://1.2.3.4:54345</div>
+          </div>
+          <div class="form-group">
+            <label>Dreamina CDP 地址（必填）</label>
+            <input type="text" id="browser-cdp-base" placeholder="http://本地机器IP:64896" />
+            <div class="muted" style="margin-top:6px;">用于页面签名和登录检测，例如 http://1.2.3.4:64896</div>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-sm" onclick="saveBrowserSettings()">保存设置</button>
+            <button class="btn btn-sm btn-ghost" onclick="loadBrowserSettings()">刷新</button>
+          </div>
+          <div id="browser-settings-error" class="error-msg" style="text-align:left"></div>
+        </div>
+      </div>
+
       <!-- API Key Tab -->
       <div id="tab-apikeys" class="tab-content">
         <div class="info-banner">
@@ -482,6 +508,7 @@ user3@example.com,password3"></textarea></div>
         document.getElementById("api-base-url").textContent = API_BASE;
         loadStats();
         renderApiDoc();
+        loadBrowserSettings();
         startAutoRefresh();
       }
       function startAutoRefresh() {
@@ -503,6 +530,7 @@ user3@example.com,password3"></textarea></div>
           if (t === "logs") loadLogs();
           else if (t === "media") loadMedia();
           else if (t === "accounts") loadAccounts();
+          else if (t === "browser") loadBrowserSettings();
           else if (t === "apikeys") loadApiKeys();
           else if (t === "stats") loadStats();
         });
@@ -530,6 +558,38 @@ user3@example.com,password3"></textarea></div>
             <tr><td>${escapeHtml(m.model)}</td><td>${m.total_calls}</td><td>${m.total_credits}</td></tr>`).join("") ||
             '<tr><td colspan="3" style="text-align:center;color:var(--text-secondary)">暂无数据</td></tr>';
         } catch (e) { console.error(e); }
+      }
+
+      // ===== 远程浏览器设置 =====
+      async function loadBrowserSettings() {
+        try {
+          const res = await api("/dashboard/browser-settings");
+          if (!res.ok) return;
+          const data = await res.json();
+          const apiInput = document.getElementById("browser-bitbrowser-api");
+          const cdpInput = document.getElementById("browser-cdp-base");
+          if (apiInput) apiInput.value = data.bitbrowser_api_base || "";
+          if (cdpInput) cdpInput.value = data.dreamina_cdp_base || "";
+        } catch (e) { console.error(e); }
+      }
+      async function saveBrowserSettings() {
+        const errorEl = document.getElementById("browser-settings-error");
+        errorEl.textContent = "";
+        const bitbrowser_api_base = document.getElementById("browser-bitbrowser-api").value.trim();
+        const dreamina_cdp_base = document.getElementById("browser-cdp-base").value.trim();
+        if (!bitbrowser_api_base || !dreamina_cdp_base) {
+          errorEl.textContent = "两个地址均为必填项";
+          return;
+        }
+        try {
+          const res = await api("/dashboard/browser-settings", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bitbrowser_api_base, dreamina_cdp_base }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) toast("远程浏览器设置已保存");
+          else errorEl.textContent = data.error || "保存失败";
+        } catch (e) { errorEl.textContent = "请求失败: " + e.message; }
       }
 
       // ===== 即梦账号管理 =====

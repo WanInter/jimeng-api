@@ -32,6 +32,13 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
+  -- 系统设置表
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+  );
+
   -- API Key统计表
   CREATE TABLE IF NOT EXISTS key_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,6 +232,33 @@ export function decryptSecret(value: string): string {
   const decipher = crypto.createDecipheriv('aes-256-gcm', secretKey(), Buffer.from(ivB64, 'base64'));
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
   return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+}
+
+
+// ==================== 系统设置 ====================
+
+export function getSetting(key: string, defaultValue: string = ''): string {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value || defaultValue;
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now', 'localtime'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now', 'localtime')
+  `).run(key, value || '');
+}
+
+export function getRemoteBrowserSettings() {
+  return {
+    bitbrowser_api_base: getSetting('bitbrowser_api_base', process.env.BITBROWSER_API_BASE || 'http://127.0.0.1:54345'),
+    dreamina_cdp_base: getSetting('dreamina_cdp_base', process.env.DREAMINA_CDP_BASE || ''),
+  };
+}
+
+export function updateRemoteBrowserSettings(settings: { bitbrowser_api_base?: string; dreamina_cdp_base?: string }): void {
+  setSetting('bitbrowser_api_base', settings.bitbrowser_api_base || '');
+  setSetting('dreamina_cdp_base', settings.dreamina_cdp_base || '');
 }
 
 // ==================== 用户管理 ====================
@@ -636,6 +670,10 @@ export function getAllAccountCredits(): { token: string; credits_remaining: numb
 }
 
 export default {
+  updateRemoteBrowserSettings,
+  getRemoteBrowserSettings,
+  setSetting,
+  getSetting,
   encryptSecret,
   decryptSecret,
   isSetupComplete,

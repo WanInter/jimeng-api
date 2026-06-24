@@ -1,10 +1,12 @@
 import logger from "@/lib/logger.ts";
+import db from "@/lib/database.ts";
 
 let msgId = 1;
 
 
 export function getCdpHttpBase(port?: string | number | null): string {
-  if (process.env.DREAMINA_CDP_BASE) return process.env.DREAMINA_CDP_BASE.replace(/\/$/, "");
+  const configuredBase = process.env.DREAMINA_CDP_BASE || db.getSetting('dreamina_cdp_base', '');
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
   const host = process.env.DREAMINA_CDP_HOST || "127.0.0.1";
   const scheme = process.env.DREAMINA_CDP_SCHEME || "http";
   const cdpPort = String(port || process.env.DREAMINA_CDP_PORT || "64896");
@@ -17,7 +19,8 @@ export function rewriteCdpWsUrl(wsUrl: string, port?: string | number | null): s
     const path = new URL(wsUrl).pathname;
     return `${process.env.DREAMINA_CDP_WS_BASE.replace(/\/$/, "")}${path}`;
   }
-  if (!process.env.DREAMINA_CDP_BASE && !process.env.DREAMINA_CDP_HOST) return wsUrl;
+  const configuredBase = process.env.DREAMINA_CDP_BASE || db.getSetting('dreamina_cdp_base', '');
+  if (!configuredBase && !process.env.DREAMINA_CDP_HOST) return wsUrl;
   const base = new URL(getCdpHttpBase(port));
   const u = new URL(wsUrl);
   u.protocol = base.protocol === "https:" ? "wss:" : "ws:";

@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import logger from "@/lib/logger.ts";
+import db from "@/lib/database.ts";
 import { cdpCall, getCdpHttpBase, getGeneratePageWs, rewriteCdpWsUrl } from "@/lib/browser-fetch.ts";
 
 export interface BitBrowserOpenResult {
@@ -32,7 +33,7 @@ export interface RunningDreaminaContext {
 const DEFAULT_LOGIN_URL = "https://dreamina.capcut.com/ai-tool/generate";
 
 function getBaseUrl() {
-  return process.env.BITBROWSER_API_BASE || "http://127.0.0.1:54345";
+  return process.env.BITBROWSER_API_BASE || db.getSetting('bitbrowser_api_base', 'http://127.0.0.1:54345');
 }
 
 function mask(value?: string | null) {
