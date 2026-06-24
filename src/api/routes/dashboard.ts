@@ -24,6 +24,19 @@ function requireAuth(request: Request): number {
   return userId;
 }
 
+
+function parseLoginAccountLines(raw: string): any[] {
+  return String(raw || '').split(/\n+/).map((line) => {
+    line = line.trim();
+    if (!line) return null;
+    const sep = line.includes('----') ? '----' : line.includes('|') ? '|' : ',';
+    const parts = line.split(sep);
+    const username = String(parts[0] || '').trim();
+    const password = parts.slice(1).join(sep).trim();
+    return username && password ? { name: username, username, password } : null;
+  }).filter(Boolean);
+}
+
 async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any }> {
   if (account.bitbrowser_profile_id) return { profileId: account.bitbrowser_profile_id, autoBound: false };
   const matched = await client.findProfileForAccount(account);
@@ -210,8 +223,8 @@ export default {
     // 批量导入账号密码（测试/正式接入 BitBrowser 登录用）
     '/accounts/import-login': async (request: Request) => {
       requireAuth(request);
-      const { accounts, region, proxy_url } = request.body;
-      const rows = Array.isArray(accounts) ? accounts : [];
+      const { accounts, raw, region, proxy_url } = request.body;
+      const rows = Array.isArray(accounts) ? accounts : parseLoginAccountLines(raw || '');
       if (!rows.length) {
         return new Response({ error: 'accounts 不能为空' }, { statusCode: 400 });
       }
