@@ -15,8 +15,8 @@
 - Certificate：`certificate/jimeng-api-tls`，状态 `Ready=True`
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `longhorn`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
-- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-auto-create-profile-20260624103101`
-- 当前镜像 digest：`sha256:086e047b3f6480a1081c79464548ef188350f5c6e7d8f390139f2b3127ffd7a3`
+- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-bitbrowser-list-pagesize-20260624105051`
+- 当前镜像 digest：`sha256:1b7d41420f6466e7798c15fbd047c9da6b3e7f00941f763558d06e1bc0695da7`
 - 镜像仓库：`hub.cs.waypeak.work/jimeng-api/jimeng-api`
 - Kaniko 构建 Namespace：`jimeng-api-build`
 - Kaniko registry Secret：`jimeng-api-registry-auth`
