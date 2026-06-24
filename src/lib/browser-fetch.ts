@@ -1,3 +1,4 @@
+import WebSocket from "ws";
 import logger from "@/lib/logger.ts";
 import db from "@/lib/database.ts";
 

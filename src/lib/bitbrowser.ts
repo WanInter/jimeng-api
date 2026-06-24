@@ -1,3 +1,4 @@
+import WebSocket from "ws";
 import axios, { AxiosInstance } from "axios";
 import logger from "@/lib/logger.ts";
 import db from "@/lib/database.ts";
