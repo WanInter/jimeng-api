@@ -48,6 +48,18 @@ function cookieHeaderFromCdp(cookies: any[]): string {
     .join("; ");
 }
 
+function norm(v: any): string {
+  return String(v || "").trim().toLowerCase();
+}
+
+function profileSearchText(profile: any): string {
+  return [
+    profile.id, profile.seq, profile.name, profile.userName, profile.username,
+    profile.remark, profile.platform, profile.url, profile.code
+  ].map(norm).join(" ");
+}
+
+
 export class BitBrowserClient {
   private http: AxiosInstance;
 
@@ -59,6 +71,29 @@ export class BitBrowserClient {
     const res = await this.http.post("/browser/list", { page, pageSize });
     if (!res.data?.success) throw new Error(res.data?.msg || `BitBrowser list failed: ${res.status}`);
     return res.data?.data?.list || [];
+  }
+
+  async findProfileForAccount(account: { name?: string; login_username?: string; username?: string; token_preview?: string }): Promise<any | null> {
+    const targets = [account.login_username, account.username, account.name]
+      .map(norm)
+      .filter(v => v && v !== "unknown");
+    if (!targets.length) return null;
+
+    const profiles = await this.list(1, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 500));
+
+    // 1. 优先精确匹配 name / userName。
+    for (const profile of profiles) {
+      const fields = [profile.name, profile.userName, profile.username].map(norm);
+      if (targets.some(t => fields.includes(t))) return profile;
+    }
+
+    // 2. 其次在 name / remark / url 等字段里包含匹配。
+    for (const profile of profiles) {
+      const haystack = profileSearchText(profile);
+      if (targets.some(t => t.length >= 4 && haystack.includes(t))) return profile;
+    }
+
+    return null;
   }
 
   async open(id: string): Promise<BitBrowserOpenResult> {

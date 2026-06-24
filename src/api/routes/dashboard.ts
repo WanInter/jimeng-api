@@ -24,6 +24,16 @@ function requireAuth(request: Request): number {
   return userId;
 }
 
+async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any }> {
+  if (account.bitbrowser_profile_id) return { profileId: account.bitbrowser_profile_id, autoBound: false };
+  const matched = await client.findProfileForAccount(account);
+  if (!matched?.id) {
+    throw new Error(`账号未绑定 BitBrowser profile，且未能按名称/登录账号自动匹配。请在 BitBrowser 中创建名称为 ${account.login_username || account.name} 的窗口，或手动绑定 Profile ID。`);
+  }
+  db.updateAccountBitBrowserProfile(Number(account.id), String(matched.id));
+  return { profileId: String(matched.id), autoBound: true, matchedProfile: matched };
+}
+
 export default {
   prefix: '/dashboard',
 
@@ -255,16 +265,16 @@ export default {
       const { id } = request.body;
       const account = db.getAccountById(Number(id));
       if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
-      if (!account.bitbrowser_profile_id) return new Response({ error: '账号未绑定 bitbrowser_profile_id' }, { statusCode: 400 });
       try {
         const client = new BitBrowserClient();
-        const opened = await client.open(account.bitbrowser_profile_id);
+        const resolved = await resolveBitBrowserProfile(account, client);
+        const opened = await client.open(resolved.profileId);
         db.updateAccountBitBrowserRuntime(Number(id), {
           cdp_port: opened.cdpPort || 0,
           cdp_ws_url: '',
-          bitbrowser_window_id: account.bitbrowser_profile_id || ''
+          bitbrowser_window_id: resolved.profileId
         });
-        return { success: true, data: opened };
+        return { success: true, autoBound: resolved.autoBound, matchedProfile: resolved.matchedProfile ? { id: resolved.matchedProfile.id, name: resolved.matchedProfile.name, seq: resolved.matchedProfile.seq } : undefined, data: opened };
       } catch (e) {
         db.updateAccountLoginStatus(Number(id), 'failed', e.message);
         return new Response({ error: '打开 BitBrowser 失败: ' + e.message }, { statusCode: 500 });
@@ -277,18 +287,19 @@ export default {
       const { id } = request.body;
       const account = db.getAccountById(Number(id));
       if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
-      if (!account.bitbrowser_profile_id) return new Response({ error: '账号未绑定 bitbrowser_profile_id' }, { statusCode: 400 });
       try {
         db.updateAccountLoginStatus(Number(id), 'logging_in');
+        const client = new BitBrowserClient();
+        const resolved = await resolveBitBrowserProfile(account, client);
         const result = await loginDreaminaViaBitBrowser({
-          bitbrowserProfileId: account.bitbrowser_profile_id,
+          bitbrowserProfileId: resolved.profileId,
           username: account.login_username,
           password: db.decryptSecret(account.login_password || ''),
         });
         db.updateAccountBitBrowserRuntime(Number(id), {
           cdp_port: result.cdpPort || 0,
           cdp_ws_url: result.cdpWsUrl || '',
-          bitbrowser_window_id: account.bitbrowser_profile_id || '',
+          bitbrowser_window_id: resolved.profileId,
           user_agent: result.userAgent || ''
         });
         if (result.cookies) {
@@ -301,7 +312,7 @@ export default {
           }
         }
         db.updateAccountLoginStatus(Number(id), result.status, result.status === 'failed' ? (result.message || '登录未确认') : '');
-        return { success: result.status !== 'failed', ...result };
+        return { success: result.status !== 'failed', autoBound: resolved.autoBound, ...result };
       } catch (e) {
         db.updateAccountLoginStatus(Number(id), 'failed', e.message);
         return new Response({ error: '登录失败: ' + e.message }, { statusCode: 500 });

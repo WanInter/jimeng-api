@@ -227,7 +227,7 @@
       <!-- 即梦账号 Tab -->
       <div id="tab-accounts" class="tab-content">
         <div class="info-banner">
-          测试阶段可手动添加 <b>sessionid</b>；正式运行建议导入账号/密码并绑定 BitBrowser Profile，使用 BitBrowser 完成自动/半自动登录。海外区域前缀：美区 <code>us-</code>、港区 <code>hk-</code>、日区 <code>jp-</code>、新区 <code>sg-</code>、越南 <code>vn-</code>。
+          测试阶段可手动添加 <b>sessionid</b>；正式运行建议导入账号/密码并使用 BitBrowser 完成自动/半自动登录。未绑定 Profile 时，点击“打开/登录”会自动从 BitBrowser 列表中按账号邮箱/名称匹配并绑定；匹配不到时再手动绑定 Profile ID。海外区域前缀：美区 <code>us-</code>、港区 <code>hk-</code>、日区 <code>jp-</code>、新区 <code>sg-</code>、越南 <code>vn-</code>。
         </div>
         <div class="action-bar">
           <h2>即梦账号管理</h2>
@@ -636,7 +636,7 @@ user2@example.com,password2"></textarea></div>
           });
           const data = await res.json();
           if (res.ok && data.success !== false) {
-            toast(okMsg || "操作完成");
+            toast((data.autoBound ? "已自动匹配并绑定 Profile；" : "") + (okMsg || "操作完成"));
           } else {
             toast((data.error || data.message || "操作失败"), "error");
           }
