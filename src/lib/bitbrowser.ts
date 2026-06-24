@@ -50,6 +50,20 @@ function extractPort(openData: any): number | undefined {
   return wsMatch ? Number(wsMatch[1]) : undefined;
 }
 
+function cdpBaseFromBitBrowserApi(bitbrowserApiBase: string, cdpPort: number): string {
+  const api = new URL(bitbrowserApiBase);
+  return `${api.protocol}//${api.hostname}:${cdpPort}`;
+}
+
+async function hasDreaminaPage(cdpBase: string): Promise<boolean> {
+  try {
+    const tabs = await fetch(`${cdpBase.replace(/\/$/, "")}/json/list`).then(r => r.json()) as any[];
+    return tabs.some(t => t.type === 'page' && String(t.url || '').includes('dreamina.capcut.com'));
+  } catch {
+    return false;
+  }
+}
+
 function cookieHeaderFromCdp(cookies: any[]): string {
   return cookies
     .filter(c => String(c.domain || "").includes("capcut.com") || String(c.domain || "").includes("dreamina"))
@@ -114,6 +128,30 @@ export class BitBrowserClient {
     }
 
     return null;
+  }
+
+  async detectDreaminaCdpBase(): Promise<{ cdpBase: string; profileId?: string; cdpPort: number; opened: BitBrowserOpenResult }> {
+    const profiles = await this.listAll(20, Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 20));
+    const candidates = [
+      ...profiles.filter(p => Number(p.status) === 1),
+      ...profiles.filter(p => Number(p.status) !== 1),
+    ];
+
+    let lastError: any;
+    for (const profile of candidates) {
+      try {
+        const opened = await this.open(String(profile.id));
+        if (!opened.cdpPort) continue;
+        const cdpBase = cdpBaseFromBitBrowserApi(this.http.defaults.baseURL || getBaseUrl(), opened.cdpPort);
+        if (await hasDreaminaPage(cdpBase)) {
+          return { cdpBase, profileId: String(profile.id), cdpPort: opened.cdpPort, opened };
+        }
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw new Error(lastError?.message || "未检测到打开 Dreamina 页面的 BitBrowser CDP，请先在 BitBrowser 中打开 dreamina.capcut.com 页面");
   }
 
   async open(id: string): Promise<BitBrowserOpenResult> {

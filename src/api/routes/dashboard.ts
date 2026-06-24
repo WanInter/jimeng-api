@@ -199,6 +199,25 @@ export default {
       return { success: true, message: '密码修改成功' };
     },
 
+    // 根据 BitBrowser API 自动检测 Dreamina CDP 地址
+    '/browser-settings/detect-cdp': async (request: Request) => {
+      requireAuth(request);
+      const bitbrowser_api_base = String(request.body.bitbrowser_api_base || db.getSetting('bitbrowser_api_base', '') || '').trim();
+      if (!bitbrowser_api_base) {
+        return new Response({ error: '请先填写 BitBrowser API 地址' }, { statusCode: 400 });
+      }
+      if (!/^https?:\/\//i.test(bitbrowser_api_base)) {
+        return new Response({ error: 'BitBrowser API 地址必须以 http:// 或 https:// 开头' }, { statusCode: 400 });
+      }
+      try {
+        const client = new BitBrowserClient(bitbrowser_api_base);
+        const detected = await client.detectDreaminaCdpBase();
+        return { success: true, dreamina_cdp_base: detected.cdpBase, profile_id: detected.profileId, cdp_port: detected.cdpPort };
+      } catch (e) {
+        return new Response({ error: '自动检测失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
     // 保存远程 BitBrowser/CDP 设置（页面只暴露必须项）
     '/browser-settings': async (request: Request) => {
       requireAuth(request);

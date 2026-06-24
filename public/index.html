@@ -248,7 +248,7 @@
       <!-- 远程浏览器 Tab -->
       <div id="tab-browser" class="tab-content">
         <div class="info-banner">
-          只填写远程服务连接本地 BitBrowser 所需的两个必填项。本地机器需允许远程服务器访问这两个地址。
+只需填写 BitBrowser API 地址；Dreamina CDP 地址可根据已打开的 BitBrowser/Dreamina 窗口自动检测。
         </div>
         <div class="table-container" style="padding:20px; max-width:760px;">
           <h2 style="font-size:18px;margin-bottom:16px;">远程 BitBrowser / CDP 设置</h2>
@@ -258,12 +258,13 @@
             <div class="muted" style="margin-top:6px;">用于打开窗口、查询 Profile，例如 http://1.2.3.4:54345</div>
           </div>
           <div class="form-group">
-            <label>Dreamina CDP 地址（必填）</label>
+            <label>Dreamina CDP 地址（自动检测，可手动改）</label>
             <input type="text" id="browser-cdp-base" placeholder="http://本地机器IP:64896" />
             <div class="muted" style="margin-top:6px;">用于页面签名和登录检测，例如 http://1.2.3.4:64896</div>
           </div>
           <div class="row-actions">
             <button class="btn btn-sm" onclick="saveBrowserSettings()">保存设置</button>
+            <button class="btn btn-sm btn-ghost" onclick="detectCdpBase()">自动检测 CDP</button>
             <button class="btn btn-sm btn-ghost" onclick="loadBrowserSettings()">刷新</button>
           </div>
           <div id="browser-settings-error" class="error-msg" style="text-align:left"></div>
@@ -572,13 +573,42 @@ user3@example.com,password3"></textarea></div>
           if (cdpInput) cdpInput.value = data.dreamina_cdp_base || "";
         } catch (e) { console.error(e); }
       }
+      async function detectCdpBase() {
+        const errorEl = document.getElementById("browser-settings-error");
+        errorEl.textContent = "";
+        const bitbrowser_api_base = document.getElementById("browser-bitbrowser-api").value.trim();
+        if (!bitbrowser_api_base) { errorEl.textContent = "请先填写 BitBrowser API 地址"; return; }
+        toastSticky("正在根据 BitBrowser API 自动检测 CDP...");
+        try {
+          const res = await api("/dashboard/browser-settings/detect-cdp", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bitbrowser_api_base }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            document.getElementById("browser-cdp-base").value = data.dreamina_cdp_base || "";
+            toast(`检测成功：CDP ${data.dreamina_cdp_base}`);
+          } else {
+            toast(data.error || "检测失败", "error");
+            errorEl.textContent = data.error || "检测失败";
+          }
+        } catch (e) {
+          toast("检测失败: " + e.message, "error");
+          errorEl.textContent = "检测失败: " + e.message;
+        }
+      }
+
       async function saveBrowserSettings() {
         const errorEl = document.getElementById("browser-settings-error");
         errorEl.textContent = "";
         const bitbrowser_api_base = document.getElementById("browser-bitbrowser-api").value.trim();
         const dreamina_cdp_base = document.getElementById("browser-cdp-base").value.trim();
-        if (!bitbrowser_api_base || !dreamina_cdp_base) {
-          errorEl.textContent = "两个地址均为必填项";
+        if (!bitbrowser_api_base) {
+          errorEl.textContent = "BitBrowser API 地址为必填项";
+          return;
+        }
+        if (!dreamina_cdp_base) {
+          errorEl.textContent = "请先点击“自动检测 CDP”，或手动填写 Dreamina CDP 地址";
           return;
         }
         try {
