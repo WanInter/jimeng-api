@@ -96,6 +96,50 @@ function profileSearchText(profile: any): string {
   ].map(norm).join(" ");
 }
 
+function parseProxyUrl(proxyUrl?: string | null): Partial<Record<string, any>> {
+  const raw = String(proxyUrl || '').trim();
+  if (!raw) return { proxyMethod: 3 };
+  try {
+    const u = new URL(raw);
+    const type = u.protocol.replace(':', '') || 'http';
+    return {
+      proxyMethod: 2,
+      proxyType: type === 'https' ? 'http' : type,
+      host: u.hostname,
+      port: Number(u.port || (type === 'https' ? 443 : 80)),
+      proxyUserName: decodeURIComponent(u.username || ''),
+      proxyPassword: decodeURIComponent(u.password || ''),
+    };
+  } catch {
+    return { proxyMethod: 3, remark: `Invalid proxy_url ignored: ${raw.slice(0, 80)}` };
+  }
+}
+
+function buildCreateProfilePayload(account: { name?: string; login_username?: string; username?: string; proxy_url?: string; region?: string }): any {
+  const username = String(account.login_username || account.username || account.name || '').trim();
+  const name = username || `Dreamina ${Date.now()}`;
+  return {
+    name,
+    remark: `auto-created by jimeng-api${account.region ? ` / ${account.region}` : ''}`,
+    url: DEFAULT_LOGIN_URL,
+    ...parseProxyUrl(account.proxy_url),
+    browserFingerPrint: {
+      coreVersion: '124',
+      ostype: 'PC',
+      os: 'Win32',
+      isIpCreateTimeZone: true,
+      isIpCreateLanguage: true,
+      isIpCreateDisplayLanguage: true,
+      openWidth: 1280,
+      openHeight: 900,
+    },
+  };
+}
+
+function extractProfileId(data: any): string {
+  return String(data?.id || data?.browserId || data?.browser_id || data?.data?.id || data?.data?.browserId || data?.data?.browser_id || '').trim();
+}
+
 
 export class BitBrowserClient {
   private http: AxiosInstance;
@@ -194,10 +238,31 @@ export class BitBrowserClient {
   async createOrUpdate(input: any): Promise<any> {
     // BitBrowser 本地 API 的新增/更新接口在不同版本里字段要求不同。
     // 这里提供透传封装：调用方传完整 browserFingerPrint / proxy 等 payload。
-    const endpoint = input.id ? "/browser/update" : (process.env.BITBROWSER_CREATE_ENDPOINT || "/browser/update");
-    const res = await this.http.post(endpoint, input);
-    if (!res.data?.success) throw new Error(res.data?.msg || `BitBrowser ${endpoint} failed: ${res.status}`);
-    return res.data.data || res.data;
+    const endpoints = input.id
+      ? ["/browser/update"]
+      : [process.env.BITBROWSER_CREATE_ENDPOINT || "/browser/update", "/browser/add"]
+          .filter((v, i, a) => v && a.indexOf(v) === i);
+
+    let lastError = '';
+    for (const endpoint of endpoints) {
+      const res = await this.http.post(endpoint, input);
+      if (res.data?.success) return res.data.data || res.data;
+      lastError = res.data?.msg || res.data?.message || `BitBrowser ${endpoint} failed: ${res.status}`;
+    }
+    throw new Error(lastError || 'BitBrowser create/update failed');
+  }
+
+  async createProfileForAccount(account: { name?: string; login_username?: string; username?: string; proxy_url?: string; region?: string }): Promise<any> {
+    const payload = buildCreateProfilePayload(account);
+    logger.info(`自动创建 BitBrowser profile: ${mask(payload.name)}`);
+    const data = await this.createOrUpdate(payload);
+    const profileId = extractProfileId(data);
+    if (profileId) return { ...data, id: profileId, autoCreatedPayload: { name: payload.name, url: payload.url, proxyType: payload.proxyType, host: payload.host, port: payload.port } };
+
+    // 某些 BitBrowser 版本创建接口只返回布尔值，不返回 id；创建后按名称再查一次。
+    const matched = await this.findProfileForAccount(account);
+    if (matched?.id) return matched;
+    throw new Error('BitBrowser profile 已创建但未返回 profile id，且无法按账号名称重新匹配');
   }
 }
 

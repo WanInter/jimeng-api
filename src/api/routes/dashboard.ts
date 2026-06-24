@@ -62,7 +62,17 @@ async function resolveBitBrowserProfile(account: any, client: BitBrowserClient):
     return { profileId: running.profileId, autoBound: true, runningContext: running };
   }
 
-  throw new Error(`账号未绑定 BitBrowser profile，且未能自动匹配。请确认 BitBrowser 中已有名称为 ${account.login_username || account.name} 的窗口，或已有窗口正在打开 dreamina.capcut.com，或手动绑定 Profile ID。`);
+  // 3) 仍未找到时，按账号邮箱自动创建 BitBrowser profile 并绑定。
+  //    这样正式批量导入账号后无需预先在 BitBrowser 手工建窗口。
+  if (account.login_username || account.name) {
+    const created = await client.createProfileForAccount(account);
+    if (created?.id) {
+      db.updateAccountBitBrowserProfile(Number(account.id), String(created.id));
+      return { profileId: String(created.id), autoBound: true, matchedProfile: created };
+    }
+  }
+
+  throw new Error(`账号未绑定 BitBrowser profile，且未能自动匹配或自动创建。请检查 BitBrowser API 是否支持创建窗口，或手动绑定 Profile ID。账号：${account.login_username || account.name}`);
 }
 
 export default {
