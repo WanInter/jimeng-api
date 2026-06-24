@@ -403,19 +403,60 @@ export async function loginDreaminaViaBitBrowser(options: {
           await evalOnPage(ws, `
 (async()=>{
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const byText = (re) => [...document.querySelectorAll('button,a,div,span')].find(el => re.test((el.innerText||el.textContent||'').trim()) && el.offsetParent !== null);
-  const loginBtn = byText(/^(log in|sign in|登录|登入|continue)$/i) || byText(/log in|sign in|登录|登入/i);
-  if (loginBtn) { loginBtn.click(); await sleep(2000); }
-  const inputs = [...document.querySelectorAll('input')].filter(i => i.offsetParent !== null);
-  const user = inputs.find(i => /email|user|account|phone|mobile|login/i.test([i.name,i.id,i.placeholder,i.type].join(' '))) || inputs[0];
-  if (user) { user.focus(); user.value = ${JSON.stringify(options.username)}; user.dispatchEvent(new Event('input',{bubbles:true})); user.dispatchEvent(new Event('change',{bubbles:true})); }
-  await sleep(500);
-  const pass = [...document.querySelectorAll('input')].find(i => i.type === 'password' || /password|密码/i.test([i.name,i.id,i.placeholder].join(' ')));
-  if (pass) { pass.focus(); pass.value = ${JSON.stringify(options.password)}; pass.dispatchEvent(new Event('input',{bubbles:true})); pass.dispatchEvent(new Event('change',{bubbles:true})); }
-  await sleep(500);
-  const submit = byText(/^(log in|sign in|登录|登入|continue|next|下一步)$/i) || [...document.querySelectorAll('button')].find(b => b.offsetParent !== null && !b.disabled);
-  if (submit) submit.click();
-  return true;
+  const visible = el => !!(el && el.offsetParent !== null);
+  const textOf = el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+  const clickLike = el => {
+    if (!el) return false;
+    el.scrollIntoView({block:'center', inline:'center'});
+    el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
+    el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
+    el.click();
+    return true;
+  };
+  const byText = (re) => [...document.querySelectorAll('button,a,div,span,[role=button]')]
+    .find(el => visible(el) && re.test(textOf(el)));
+  const setValue = (el, value) => {
+    if (!el) return false;
+    el.focus();
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+    if (setter) setter.call(el, value); else el.value = value;
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+    el.dispatchEvent(new Event('change',{bubbles:true}));
+    return true;
+  };
+  const loginRe = /^(log in|sign in|login|continue|登录|登入|đăng nhập|dang nhap)$/i;
+  const nextRe = /^(log in|sign in|login|continue|next|submit|登录|登入|继续|下一步|tiếp tục|tiep tuc|kế tiếp|ke tiep|đăng nhập|dang nhap)$/i;
+
+  let loginBtn = byText(loginRe) || byText(/log in|sign in|登录|登入|đăng nhập|dang nhap/i);
+  if (loginBtn) { clickLike(loginBtn); await sleep(3000); }
+
+  let user, pass;
+  for (let i = 0; i < 8; i++) {
+    const inputs = [...document.querySelectorAll('input')].filter(visible);
+    user = inputs.find(i => /email|user|account|phone|mobile|login|mail|邮箱|账号|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')))
+      || inputs.find(i => i.type !== 'password')
+      || inputs[0];
+    if (user) break;
+    await sleep(1000);
+  }
+  const userSet = setValue(user, ${JSON.stringify(options.username)});
+  await sleep(800);
+  let next = byText(nextRe) || [...document.querySelectorAll('button,[role=button]')].find(b => visible(b) && !b.disabled && nextRe.test(textOf(b)));
+  if (next && ![...document.querySelectorAll('input')].some(i => visible(i) && i.type === 'password')) {
+    clickLike(next);
+    await sleep(2500);
+  }
+
+  for (let i = 0; i < 8; i++) {
+    pass = [...document.querySelectorAll('input')].find(i => visible(i) && (i.type === 'password' || /password|密码|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))));
+    if (pass) break;
+    await sleep(1000);
+  }
+  const passSet = setValue(pass, ${JSON.stringify(options.password)});
+  await sleep(800);
+  const submit = byText(nextRe) || [...document.querySelectorAll('button,[role=button]')].find(b => visible(b) && !b.disabled);
+  if (submit) clickLike(submit);
+  return { userSet, passSet, url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1000) };
 })()`);
           await new Promise(r => setTimeout(r, 10000));
         }
