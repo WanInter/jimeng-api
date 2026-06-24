@@ -572,8 +572,7 @@ user2@example.com,password2"></textarea></div>
         raw = raw.trim();
         if (!raw) return [];
         if (raw.startsWith("[")) return JSON.parse(raw);
-        return raw.split(/
-+/).map((line) => {
+        return raw.split(/\n+/).map((line) => {
           line = line.trim();
           if (!line) return null;
           let parts = line.includes("----") ? line.split("----") : line.split(",");
