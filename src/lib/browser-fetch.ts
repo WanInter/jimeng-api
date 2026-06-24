@@ -2,12 +2,37 @@ import logger from "@/lib/logger.ts";
 
 let msgId = 1;
 
+
+export function getCdpHttpBase(port?: string | number | null): string {
+  if (process.env.DREAMINA_CDP_BASE) return process.env.DREAMINA_CDP_BASE.replace(/\/$/, "");
+  const host = process.env.DREAMINA_CDP_HOST || "127.0.0.1";
+  const scheme = process.env.DREAMINA_CDP_SCHEME || "http";
+  const cdpPort = String(port || process.env.DREAMINA_CDP_PORT || "64896");
+  return `${scheme}://${host}:${cdpPort}`;
+}
+
+export function rewriteCdpWsUrl(wsUrl: string, port?: string | number | null): string {
+  if (!wsUrl) return wsUrl;
+  if (process.env.DREAMINA_CDP_WS_BASE) {
+    const path = new URL(wsUrl).pathname;
+    return `${process.env.DREAMINA_CDP_WS_BASE.replace(/\/$/, "")}${path}`;
+  }
+  if (!process.env.DREAMINA_CDP_BASE && !process.env.DREAMINA_CDP_HOST) return wsUrl;
+  const base = new URL(getCdpHttpBase(port));
+  const u = new URL(wsUrl);
+  u.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  u.hostname = base.hostname;
+  u.port = base.port;
+  return u.toString();
+}
+
 export async function getGeneratePageWs(port: string): Promise<string> {
-  const tabs = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()) as any[];
+  const base = getCdpHttpBase(port);
+  const tabs = await fetch(`${base}/json/list`).then(r => r.json()) as any[];
   const tab = tabs.find(t => t.type === 'page' && String(t.url || '').includes('/ai-tool/generate'))
     || tabs.find(t => t.type === 'page' && String(t.url || '').includes('dreamina.capcut.com'));
-  if (!tab?.webSocketDebuggerUrl) throw new Error(`Dreamina CDP page not found on port ${port}`);
-  return tab.webSocketDebuggerUrl;
+  if (!tab?.webSocketDebuggerUrl) throw new Error(`Dreamina CDP page not found on ${base}`);
+  return rewriteCdpWsUrl(tab.webSocketDebuggerUrl, port);
 }
 
 export function cdpCall(ws: WebSocket, method: string, params: any = {}): Promise<any> {

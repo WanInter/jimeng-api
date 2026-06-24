@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from "axios";
 import logger from "@/lib/logger.ts";
-import { cdpCall, getGeneratePageWs } from "@/lib/browser-fetch.ts";
+import { cdpCall, getCdpHttpBase, getGeneratePageWs, rewriteCdpWsUrl } from "@/lib/browser-fetch.ts";
 
 export interface BitBrowserOpenResult {
   ws?: string;
@@ -153,7 +153,7 @@ function getCandidateCdpPorts(extra?: Array<number | string | null | undefined>)
 export async function discoverRunningDreaminaContext(extraPorts: Array<number | string | null | undefined> = []): Promise<RunningDreaminaContext | null> {
   for (const port of getCandidateCdpPorts(extraPorts)) {
     try {
-      const tabs = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()) as any[];
+      const tabs = await fetch(`${getCdpHttpBase(port)}/json/list`).then(r => r.json()) as any[];
       const dreaminaPage = tabs.find(t => t.type === 'page' && String(t.url || '').includes('dreamina.capcut.com'));
       if (!dreaminaPage) continue;
       const workbench = tabs.find(t => t.type === 'page' && String(t.url || '').includes('console.bitbrowser.net'));
@@ -163,7 +163,7 @@ export async function discoverRunningDreaminaContext(extraPorts: Array<number | 
       }
       return {
         cdpPort: port,
-        pageWsUrl: dreaminaPage.webSocketDebuggerUrl,
+        pageWsUrl: rewriteCdpWsUrl(dreaminaPage.webSocketDebuggerUrl, port),
         profileId,
         pageUrl: dreaminaPage.url,
         title: dreaminaPage.title,
