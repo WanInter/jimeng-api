@@ -7,6 +7,7 @@ import HTTP_STATUS_CODES from '@/lib/http-status-codes.ts';
 import db from '@/lib/database.ts';
 import { getCredit, request as jimengRequest } from '@/api/controllers/core.ts';
 import { triggerHealthCheck, triggerCreditsSync } from '@/lib/account-keeper.ts';
+import BitBrowserClient, { checkDreaminaLoginByCdp, loginDreaminaViaBitBrowser } from '@/lib/bitbrowser.ts';
 
 // 验证登录状态的辅助函数
 function getSessionUserId(request: Request): number | null {
@@ -193,6 +194,144 @@ export default {
         return { success: true, message: 'Cookie 已更新' };
       } catch (e) {
         return new Response({ error: '更新失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 批量导入账号密码（测试/正式接入 BitBrowser 登录用）
+    '/accounts/import-login': async (request: Request) => {
+      requireAuth(request);
+      const { accounts, region, proxy_url } = request.body;
+      const rows = Array.isArray(accounts) ? accounts : [];
+      if (!rows.length) {
+        return new Response({ error: 'accounts 不能为空' }, { statusCode: 400 });
+      }
+      const ids: number[] = [];
+      for (const row of rows) {
+        const username = String(row.username || row.email || '').trim();
+        const password = String(row.password || '').trim();
+        if (!username || !password) continue;
+        ids.push(db.importLoginAccount({
+          name: row.name || username,
+          username,
+          password,
+          region: row.region || region || 'vn',
+          proxy_url: row.proxy_url || proxy_url || '',
+          bitbrowser_profile_id: row.bitbrowser_profile_id || row.profile_id || ''
+        }));
+      }
+      return { success: true, ids, message: `已导入 ${ids.length} 个账号` };
+    },
+
+    // 绑定已有 BitBrowser profile 到账号
+    '/accounts/bitbrowser/bind': async (request: Request) => {
+      requireAuth(request);
+      const { id, profile_id } = request.body;
+      if (!id || !profile_id) return new Response({ error: '缺少 id 或 profile_id' }, { statusCode: 400 });
+      db.updateAccountBitBrowserProfile(Number(id), String(profile_id));
+      return { success: true, message: 'BitBrowser profile 已绑定' };
+    },
+
+    // 透传创建/更新 BitBrowser profile：不同 BitBrowser 版本字段有差异，调用方传完整 payload。
+    '/accounts/bitbrowser/create': async (request: Request) => {
+      requireAuth(request);
+      const { id, payload } = request.body;
+      if (!id || !payload) return new Response({ error: '缺少 id 或 payload' }, { statusCode: 400 });
+      const account = db.getAccountById(Number(id));
+      if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
+      try {
+        const client = new BitBrowserClient();
+        const data = await client.createOrUpdate(payload);
+        const profileId = data?.id || data?.browserId || data?.browser_id || payload.id;
+        if (profileId) db.updateAccountBitBrowserProfile(Number(id), String(profileId));
+        return { success: true, profile_id: profileId, data };
+      } catch (e) {
+        return new Response({ error: '创建 BitBrowser profile 失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 打开账号绑定的 BitBrowser profile，并记录 CDP 端口
+    '/accounts/bitbrowser/open': async (request: Request) => {
+      requireAuth(request);
+      const { id } = request.body;
+      const account = db.getAccountById(Number(id));
+      if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
+      if (!account.bitbrowser_profile_id) return new Response({ error: '账号未绑定 bitbrowser_profile_id' }, { statusCode: 400 });
+      try {
+        const client = new BitBrowserClient();
+        const opened = await client.open(account.bitbrowser_profile_id);
+        db.updateAccountBitBrowserRuntime(Number(id), {
+          cdp_port: opened.cdpPort || 0,
+          cdp_ws_url: '',
+          bitbrowser_window_id: account.bitbrowser_profile_id || ''
+        });
+        return { success: true, data: opened };
+      } catch (e) {
+        db.updateAccountLoginStatus(Number(id), 'failed', e.message);
+        return new Response({ error: '打开 BitBrowser 失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 自动/半自动登录 Dreamina。遇到验证码会返回 need_2fa，人工完成后调用 check-login。
+    '/accounts/bitbrowser/login': async (request: Request) => {
+      requireAuth(request);
+      const { id } = request.body;
+      const account = db.getAccountById(Number(id));
+      if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
+      if (!account.bitbrowser_profile_id) return new Response({ error: '账号未绑定 bitbrowser_profile_id' }, { statusCode: 400 });
+      try {
+        db.updateAccountLoginStatus(Number(id), 'logging_in');
+        const result = await loginDreaminaViaBitBrowser({
+          bitbrowserProfileId: account.bitbrowser_profile_id,
+          username: account.login_username,
+          password: db.decryptSecret(account.login_password || ''),
+        });
+        db.updateAccountBitBrowserRuntime(Number(id), {
+          cdp_port: result.cdpPort || 0,
+          cdp_ws_url: result.cdpWsUrl || '',
+          bitbrowser_window_id: account.bitbrowser_profile_id || '',
+          user_agent: result.userAgent || ''
+        });
+        if (result.cookies) {
+          const sessionMatch = result.cookies.match(/(?:^|;\s*)sessionid=([^;]+)/);
+          if (sessionMatch?.[1]) {
+            const token = `${account.region || 'vn'}-${sessionMatch[1]}`;
+            db.updateAccountTokenAndCookie(Number(id), token, result.cookies);
+          } else {
+            db.updateAccountCookie(Number(id), result.cookies);
+          }
+        }
+        db.updateAccountLoginStatus(Number(id), result.status, result.status === 'failed' ? (result.message || '登录未确认') : '');
+        return { success: result.status !== 'failed', ...result };
+      } catch (e) {
+        db.updateAccountLoginStatus(Number(id), 'failed', e.message);
+        return new Response({ error: '登录失败: ' + e.message }, { statusCode: 500 });
+      }
+    },
+
+    // 检测当前 BitBrowser 页面登录状态；人工处理验证码后使用
+    '/accounts/bitbrowser/check-login': async (request: Request) => {
+      requireAuth(request);
+      const { id } = request.body;
+      const account = db.getAccountById(Number(id));
+      if (!account) return new Response({ error: '账号不存在' }, { statusCode: 404 });
+      const cdpPort = Number(account.cdp_port || process.env.DREAMINA_CDP_PORT || 0);
+      if (!cdpPort) return new Response({ error: '缺少 CDP 端口，请先打开 BitBrowser' }, { statusCode: 400 });
+      try {
+        const result = await checkDreaminaLoginByCdp(cdpPort, account.cdp_ws_url || undefined);
+        if (result.cookies) {
+          const sessionMatch = result.cookies.match(/(?:^|;\s*)sessionid=([^;]+)/);
+          if (sessionMatch?.[1]) {
+            const token = `${account.region || 'vn'}-${sessionMatch[1]}`;
+            db.updateAccountTokenAndCookie(Number(id), token, result.cookies);
+          } else {
+            db.updateAccountCookie(Number(id), result.cookies);
+          }
+        }
+        db.updateAccountLoginStatus(Number(id), result.status, result.status === 'failed' ? '未检测到登录态 Cookie' : '');
+        return { success: result.status === 'ok', ...result };
+      } catch (e) {
+        db.updateAccountLoginStatus(Number(id), 'failed', e.message);
+        return new Response({ error: '检测失败: ' + e.message }, { statusCode: 500 });
       }
     },
 

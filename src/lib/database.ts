@@ -118,6 +118,16 @@ db.exec(`
 // 迁移：为已有表添加新字段（如果不存在）
 try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN proxy_url TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
 try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN cookie TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN login_username TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN login_password TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN bitbrowser_profile_id TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN bitbrowser_window_id TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN cdp_port INTEGER DEFAULT 0"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN cdp_ws_url TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN user_agent TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN login_status TEXT DEFAULT 'unknown'"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN last_login_at TEXT"); } catch (e) { /* 字段已存在 */ }
+try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN last_login_error TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
 
 // 初始化默认积分消耗规则（仅在表为空时插入）
 const ruleCount = (db.prepare('SELECT COUNT(*) as c FROM cost_rules').get() as { c: number }).c;
@@ -193,6 +203,28 @@ export function keyPreview(key: string): string {
 // Key哈希
 export function hashKey(key: string): string {
   return crypto.createHash('md5').update(key).digest('hex');
+}
+
+
+function secretKey(): Buffer {
+  return crypto.createHash('sha256').update(process.env.ACCOUNT_SECRET || process.env.SESSION_SECRET || 'jimeng-api-local-secret').digest();
+}
+
+export function encryptSecret(value: string): string {
+  if (!value || value.startsWith('enc:')) return value || '';
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', secretKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+export function decryptSecret(value: string): string {
+  if (!value || !value.startsWith('enc:')) return value || '';
+  const [, ivB64, tagB64, dataB64] = value.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', secretKey(), Buffer.from(ivB64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
 }
 
 // ==================== 用户管理 ====================
@@ -408,6 +440,44 @@ export function getAccountCookieByToken(token: string): string | null {
   return account?.cookie || null;
 }
 
+
+export function importLoginAccount(input: {
+  name: string; username: string; password: string; region?: string; proxy_url?: string; bitbrowser_profile_id?: string;
+}): number {
+  const token = `pending-${crypto.randomBytes(16).toString('hex')}`;
+  const preview = keyPreview(input.username || token);
+  const result = db.prepare(`
+    INSERT INTO jimeng_accounts (name, token, token_preview, region, proxy_url, login_username, login_password, bitbrowser_profile_id, login_status, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'unknown')
+  `).run(input.name, token, preview, input.region || 'vn', input.proxy_url || '', input.username, encryptSecret(input.password), input.bitbrowser_profile_id || '');
+  return result.lastInsertRowid as number;
+}
+
+export function updateAccountLoginSecret(id: number, username: string, password: string): void {
+  db.prepare('UPDATE jimeng_accounts SET login_username = ?, login_password = ? WHERE id = ?').run(username, encryptSecret(password), id);
+}
+
+export function updateAccountBitBrowserProfile(id: number, profileId: string): void {
+  db.prepare('UPDATE jimeng_accounts SET bitbrowser_profile_id = ? WHERE id = ?').run(profileId, id);
+}
+
+export function updateAccountBitBrowserRuntime(id: number, runtime: { cdp_port?: number | null; cdp_ws_url?: string | null; bitbrowser_window_id?: string | null; user_agent?: string | null }): void {
+  db.prepare(`
+    UPDATE jimeng_accounts SET cdp_port = ?, cdp_ws_url = ?, bitbrowser_window_id = ?, user_agent = ? WHERE id = ?
+  `).run(runtime.cdp_port || 0, runtime.cdp_ws_url || '', runtime.bitbrowser_window_id || '', runtime.user_agent || '', id);
+}
+
+export function updateAccountLoginStatus(id: number, status: string, error: string = ''): void {
+  db.prepare(`UPDATE jimeng_accounts SET login_status = ?, last_login_error = ?, last_login_at = datetime('now', 'localtime') WHERE id = ?`)
+    .run(status, error, id);
+}
+
+export function updateAccountTokenAndCookie(id: number, token: string, cookie: string): void {
+  db.prepare(`
+    UPDATE jimeng_accounts SET token = ?, token_preview = ?, cookie = ?, login_status = 'ok', status = 'active', last_login_error = '', last_login_at = datetime('now', 'localtime') WHERE id = ?
+  `).run(token, keyPreview(token), cookie, id);
+}
+
 // ==================== 积分消耗规则管理 ====================
 
 export function getCostRules() {
@@ -539,11 +609,11 @@ export function getRandomAccountToken(): string | null {
  * @param token session token
  * @returns 账号信息或 null
  */
-export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string } | null {
+export function getAccountByToken(token: string): { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string; cdp_port?: number; cdp_ws_url?: string; bitbrowser_profile_id?: string } | null {
   // 去掉可能的区域前缀进行匹配，因为 DB 中存储的是完整 token
   const account = db.prepare(
-    'SELECT id, credits_remaining, status, proxy_url, cookie FROM jimeng_accounts WHERE token = ?'
-  ).get(token) as { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string } | undefined;
+    'SELECT id, credits_remaining, status, proxy_url, cookie, cdp_port, cdp_ws_url, bitbrowser_profile_id FROM jimeng_accounts WHERE token = ?'
+  ).get(token) as { id: number; credits_remaining: number; status: string; proxy_url: string; cookie: string; cdp_port?: number; cdp_ws_url?: string; bitbrowser_profile_id?: string } | undefined;
   return account || null;
 }
 
@@ -559,6 +629,8 @@ export function getAllAccountCredits(): { token: string; credits_remaining: numb
 }
 
 export default {
+  encryptSecret,
+  decryptSecret,
   isSetupComplete,
   createUser,
   validateUser,
@@ -582,6 +654,12 @@ export default {
   updateAccountProxy,
   updateAccountCookie,
   getAccountCookieByToken,
+  updateAccountTokenAndCookie,
+  updateAccountLoginStatus,
+  updateAccountBitBrowserRuntime,
+  updateAccountBitBrowserProfile,
+  updateAccountLoginSecret,
+  importLoginAccount,
   deleteAccount,
   getCostRules,
   addCostRule,

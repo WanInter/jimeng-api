@@ -510,7 +510,11 @@ export async function request(
         const qs = new URLSearchParams(requestParams as any).toString();
         const browserUrl = `${fullUrl}${qs ? `?${qs}` : ""}`;
         const browserData = (options as any).data || {};
-        const signed = await browserSignRequest(browserUrl, browserData);
+        const browserAccount = db.getAccountByToken(refreshToken) || db.getAccountByToken(tokenWithRegion);
+        const signed = await browserSignRequest(browserUrl, browserData, {
+          cdpPort: browserAccount?.cdp_port,
+          cdpWsUrl: browserAccount?.cdp_ws_url,
+        });
         response = await axios.request({
           method,
           url: signed.url,

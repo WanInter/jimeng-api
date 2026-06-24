@@ -2,7 +2,7 @@ import logger from "@/lib/logger.ts";
 
 let msgId = 1;
 
-async function getGeneratePageWs(port: string): Promise<string> {
+export async function getGeneratePageWs(port: string): Promise<string> {
   const tabs = await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json()) as any[];
   const tab = tabs.find(t => t.type === 'page' && String(t.url || '').includes('/ai-tool/generate'))
     || tabs.find(t => t.type === 'page' && String(t.url || '').includes('dreamina.capcut.com'));
@@ -10,7 +10,7 @@ async function getGeneratePageWs(port: string): Promise<string> {
   return tab.webSocketDebuggerUrl;
 }
 
-function cdpCall(ws: WebSocket, method: string, params: any = {}): Promise<any> {
+export function cdpCall(ws: WebSocket, method: string, params: any = {}): Promise<any> {
   const id = msgId++;
   ws.send(JSON.stringify({ id, method, params }));
   return new Promise((resolve, reject) => {
@@ -43,9 +43,9 @@ export interface BrowserSignedRequest {
  * and browser headers. We cancel the browser request and return the signed URL
  * to the Node caller.
  */
-export async function browserSignRequest(url: string, data: any): Promise<BrowserSignedRequest> {
-  const port = process.env.DREAMINA_CDP_PORT || '64896';
-  const wsUrl = await getGeneratePageWs(port);
+export async function browserSignRequest(url: string, data: any, options: { cdpPort?: string | number | null; cdpWsUrl?: string | null } = {}): Promise<BrowserSignedRequest> {
+  const port = String(options.cdpPort || process.env.DREAMINA_CDP_PORT || '64896');
+  const wsUrl = options.cdpWsUrl || await getGeneratePageWs(port);
   const ws = new WebSocket(wsUrl);
   const targetPath = new URL(url).pathname;
 
@@ -110,9 +110,9 @@ export async function browserSignRequest(url: string, data: any): Promise<Browse
 }
 
 /** Fallback/direct browser fetch, useful for debugging. */
-export async function browserFetchJson(url: string, data: any): Promise<any> {
-  const port = process.env.DREAMINA_CDP_PORT || '64896';
-  const wsUrl = await getGeneratePageWs(port);
+export async function browserFetchJson(url: string, data: any, options: { cdpPort?: string | number | null; cdpWsUrl?: string | null } = {}): Promise<any> {
+  const port = String(options.cdpPort || process.env.DREAMINA_CDP_PORT || '64896');
+  const wsUrl = options.cdpWsUrl || await getGeneratePageWs(port);
   const ws = new WebSocket(wsUrl);
   const evalId = msgId++;
   const expression = `
