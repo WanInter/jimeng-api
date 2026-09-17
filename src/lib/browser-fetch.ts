@@ -53,22 +53,23 @@ export async function getGeneratePageWs(port: string): Promise<string> {
   return rewriteCdpWsUrl(tab.webSocketDebuggerUrl, port);
 }
 
-export function cdpCall(ws: WebSocket, method: string, params: any = {}): Promise<any> {
+export function cdpCall(ws: WebSocket, method: string, params: any = {}, timeoutMs = 30000): Promise<any> {
   const id = msgId++;
   ws.send(JSON.stringify({ id, method, params }));
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.removeEventListener('message', onMessage as any);
+      reject(new Error(`CDP call timeout: ${method}`));
+    }, timeoutMs);
     const onMessage = (ev: MessageEvent) => {
       const msg = JSON.parse(String(ev.data));
       if (msg.id !== id) return;
+      clearTimeout(timer);
       ws.removeEventListener('message', onMessage as any);
       if (msg.error) reject(new Error(JSON.stringify(msg.error)));
       else resolve(msg.result);
     };
     ws.addEventListener('message', onMessage as any);
-    setTimeout(() => {
-      ws.removeEventListener('message', onMessage as any);
-      reject(new Error(`CDP call timeout: ${method}`));
-    }, 30000);
   });
 }
 

@@ -31,7 +31,7 @@ export interface RunningDreaminaContext {
   title?: string;
 }
 
-const DEFAULT_LOGIN_URL = "https://dreamina.capcut.com/ai-tool/generate";
+const DEFAULT_LOGIN_URL = "https://dreamina.capcut.com/ai-tool/home?need_login=true";
 
 function getBaseUrl() {
   return process.env.BITBROWSER_API_BASE || db.getSetting('bitbrowser_api_base', 'http://127.0.0.1:54345');
@@ -153,11 +153,17 @@ function extractProfileId(data: any): string {
 }
 
 
+function getBitBrowserApiTimeoutMs(): number {
+  const raw = process.env.BITBROWSER_API_TIMEOUT_MS || db.getSetting('bitbrowser_api_timeout_ms', '120000');
+  const timeout = Number(raw);
+  return Number.isFinite(timeout) && timeout >= 30000 ? timeout : 120000;
+}
+
 export class BitBrowserClient {
   private http: AxiosInstance;
 
   constructor(baseUrl = getBaseUrl()) {
-    this.http = axios.create({ baseURL: baseUrl, timeout: 30000, validateStatus: () => true });
+    this.http = axios.create({ baseURL: baseUrl, timeout: getBitBrowserApiTimeoutMs(), validateStatus: () => true });
   }
 
   async list(page = 1, pageSize = 20): Promise<any[]> {
@@ -166,13 +172,26 @@ export class BitBrowserClient {
     return res.data?.data?.list || [];
   }
 
-  async listAll(maxPages = 120, pageSize = Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 1)): Promise<any[]> {
+  async listAll(maxPages = 30, pageSize = Number(process.env.BITBROWSER_LIST_PAGE_SIZE || 2)): Promise<any[]> {
     const all: any[] = [];
     for (let page = 1; page <= maxPages; page++) {
-      const rows = await this.list(page, pageSize);
+      let rows: any[] = [];
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          rows = await this.list(page, pageSize);
+          break;
+        } catch (e) {
+          const msg = String(e?.message || e || '');
+          if (!/频繁|frequency|frequent|rate/i.test(msg) || attempt === 3) throw e;
+          logger.warn(`BitBrowser list 触发限频，退避后重试: page=${page}, attempt=${attempt}`);
+          await new Promise(r => setTimeout(r, 1500 * attempt));
+        }
+      }
       if (!rows.length) break;
       all.push(...rows);
       if (rows.length < pageSize) break;
+      // BitBrowser local API can rate-limit rapid pagination requests.
+      await new Promise(r => setTimeout(r, Number(process.env.BITBROWSER_LIST_DELAY_MS || 350)));
     }
     return all;
   }
@@ -321,8 +340,8 @@ async function waitForPageWs(port: number, timeoutMs = 60000): Promise<string> {
   throw lastError || new Error(`Dreamina page not found on CDP port ${port}`);
 }
 
-async function evalOnPage<T = any>(ws: WebSocket, expression: string): Promise<T> {
-  const result = await cdpCall(ws, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+async function evalOnPage<T = any>(ws: WebSocket, expression: string, timeoutMs = 30000): Promise<T> {
+  const result = await cdpCall(ws, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
   const remote = result?.result;
   if (remote?.subtype === "error") throw new Error(remote?.description || remote?.value || "Runtime.evaluate failed");
   return remote?.value as T;
@@ -335,6 +354,99 @@ async function navigateAndWait(ws: WebSocket, url: string) {
   await new Promise(r => setTimeout(r, 5000));
 }
 
+async function clickTextByCdp(ws: WebSocket, pattern: string, flags = 'i'): Promise<boolean> {
+  const expression = `(() => {
+    const re = new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)});
+    const visible = el => !!(el && el.offsetParent !== null);
+    const textOf = el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+    const lineCount = el => textOf(el).split(String.fromCharCode(10)).filter(Boolean).length;
+    const score = el => {
+      const cls = String(el.className || '');
+      const role = el.getAttribute('role') || '';
+      const txt = textOf(el);
+      return (el.matches('button,a,[role=button],[role=menuitem]') ? 120 : 0)
+        + (/lv_new_third_part_sign_in_expand-button|login-button/i.test(cls) ? 220 : 0)
+        + (/lv_new_third_part_sign_in_expand-wrapper/i.test(cls) ? 80 : 0)
+        + (/email|mail|電子郵件|电子邮件|郵箱|邮箱|login|sign/i.test(cls + ' ' + txt) ? 80 : 0)
+        + (role === 'menuitem' ? 40 : 0)
+        + (lineCount(el) === 1 ? 120 : 0)
+        - txt.length / 5
+        - lineCount(el) * 80
+        - el.querySelectorAll('*').length;
+    };
+    const clickSelector = '.lv_new_third_part_sign_in_expand-button,.login-button-CK3g2c,button,a,[role=button],[role=menuitem]';
+    const candidates = [...document.querySelectorAll('button,a,[role=button],[role=menuitem],div,span')]
+      .filter(el => visible(el) && re.test(textOf(el)))
+      .map(el => {
+        // If a large modal/container matches because its text includes every
+        // login method, never blindly pick its first child (usually Google).
+        // Prefer the smallest clickable descendant whose own text also matches.
+        const matchingChildren = [...(el.querySelectorAll?.(clickSelector) || [])].filter(c => visible(c) && re.test(textOf(c)));
+        const child = matchingChildren.sort((a, b) => score(b) - score(a))[0];
+        const closest = el.closest(clickSelector);
+        const clickable = child || (closest && re.test(textOf(closest)) ? closest : null) || el;
+        return clickable;
+      })
+      .filter((el, idx, arr) => arr.indexOf(el) === idx)
+      .sort((a, b) => score(b) - score(a));
+    const el = candidates[0];
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: textOf(el).slice(0, 120), tag: el.tagName, role: el.getAttribute('role'), cls: String(el.className || '').slice(0, 120) };
+  })()`;
+  const result = await cdpCall(ws, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, 15000);
+  const target = result?.result?.value;
+  if (!target || typeof target.x !== 'number' || typeof target.y !== 'number') return false;
+  logger.info(`CDP 点击文本: ${target.text} (${target.tag}${target.role ? '/' + target.role : ''})`);
+  await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y, button: 'none' }, 5000);
+  await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1 }, 5000);
+  await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 }, 5000);
+  return true;
+}
+
+
+async function hasDreaminaCredentialFields(ws: WebSocket): Promise<boolean> {
+  return await evalOnPage<boolean>(ws, `(() => {
+    const visible = el => !!(el && el.offsetParent !== null);
+    const inputs = [...document.querySelectorAll('input')].filter(visible);
+    const hasUser = inputs.some(i => i.type === 'email' || /email|user|account|phone|mobile|login|mail|邮箱|郵箱|账号|帳號|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')));
+    const hasPass = inputs.some(i => i.type === 'password' || /password|密码|密碼|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' ')));
+    return hasUser && hasPass;
+  })()`, 15000);
+}
+
+async function getPageSnapshot(ws: WebSocket, limit = 3000): Promise<{ url: string; title: string; text: string; cookies: string; ua: string }> {
+  const info = await evalOnPage<any>(ws, `JSON.stringify({
+    url: location.href,
+    title: document.title,
+    text: document.body ? document.body.innerText.slice(0, ${limit}) : '',
+    cookies: document.cookie,
+    ua: navigator.userAgent
+  })`, 20000);
+  return JSON.parse(info || "{}");
+}
+
+async function handleDreaminaPostSubmitRecovery(ws: WebSocket): Promise<boolean> {
+  // Dreamina occasionally completes the account login server-side but leaves an
+  // error modal in the browser (Traditional Chinese: 發生錯誤 / 重新整理頁面並重試).
+  // A real click on the modal refresh/retry button reveals the already-created
+  // session cookies. Handle this generically for imported accounts/locales.
+  const snapshot = await getPageSnapshot(ws, 2500).catch(() => null);
+  const text = String(snapshot?.text || '');
+  if (!/(發生錯誤|发生错误|something went wrong|error occurred|重新整理|刷新|重試|重试|retry|refresh)/i.test(text)) {
+    return false;
+  }
+
+  logger.warn('Dreamina 登录后出现错误/刷新提示，尝试点击重新整理/重试后再次检测登录态');
+  const clicked = await clickTextByCdp(ws, '重新整理|刷新|重試|重试|retry|refresh|try again').catch(() => false);
+  if (!clicked) {
+    await cdpCall(ws, 'Page.reload', { ignoreCache: false }, 10000).catch(() => null);
+  }
+  await new Promise(r => setTimeout(r, Number(process.env.DREAMINA_LOGIN_RECOVERY_WAIT_MS || 25000)));
+  return true;
+}
+
 export async function checkDreaminaLoginByCdp(cdpPort: number, cdpWsUrl?: string | null): Promise<DreaminaLoginResult> {
   const wsUrl = cdpWsUrl || await waitForPageWs(cdpPort, 15000);
   const ws = new WebSocket(wsUrl);
@@ -342,14 +454,7 @@ export async function checkDreaminaLoginByCdp(cdpPort: number, cdpWsUrl?: string
     const timer = setTimeout(() => { try { ws.close(); } catch {}; reject(new Error("check login timeout")); }, 30000);
     ws.onopen = async () => {
       try {
-        const info = await evalOnPage<any>(ws, `JSON.stringify({
-          url: location.href,
-          title: document.title,
-          text: document.body ? document.body.innerText.slice(0, 3000) : '',
-          cookies: document.cookie,
-          ua: navigator.userAgent
-        })`);
-        const parsed = JSON.parse(info || "{}");
+        const parsed = await getPageSnapshot(ws, 3000);
         const cookies = await cdpCall(ws, "Network.getAllCookies").catch(() => ({ cookies: [] }));
         const cookieHeader = cookieHeaderFromCdp(cookies.cookies || []);
         const text = String(parsed.text || "").toLowerCase();
@@ -400,7 +505,25 @@ export async function loginDreaminaViaBitBrowser(options: {
 
         if (options.username && options.password) {
           logger.info(`尝试自动填写 Dreamina 登录表单: ${mask(options.username)}`);
-          await evalOnPage(ws, `
+          // Prefer real CDP mouse clicks for the login dialog. Dreamina often ignores
+          // synthetic DOM click events on these login controls. If the credential
+          // form is already visible, do not click the login-method chooser again;
+          // doing so can reset the modal back to the method selection page.
+          const alreadyAtCredentialForm = await hasDreaminaCredentialFields(ws).catch(() => false);
+          if (!alreadyAtCredentialForm) {
+            const emailClickedFirst = await clickTextByCdp(ws, '使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|電子郵件|电子邮件|邮箱|郵箱').catch(() => false);
+            if (emailClickedFirst) await new Promise(r => setTimeout(r, 2500));
+            if (!emailClickedFirst) {
+              await clickTextByCdp(ws, '^(log in|sign in|login|continue|登录|登入|đăng nhập|dang nhap)$').catch(() => false);
+              await new Promise(r => setTimeout(r, 2500));
+              await clickTextByCdp(ws, '使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|電子郵件|电子邮件|邮箱|郵箱').catch(() => false);
+              await new Promise(r => setTimeout(r, 2500));
+            }
+          } else {
+            logger.info('Dreamina 已在邮箱/密码表单，跳过登录方式选择点击');
+          }
+          try {
+            await evalOnPage(ws, `
 (async()=>{
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const visible = el => !!(el && el.offsetParent !== null);
@@ -408,57 +531,85 @@ export async function loginDreaminaViaBitBrowser(options: {
   const clickLike = el => {
     if (!el) return false;
     el.scrollIntoView({block:'center', inline:'center'});
-    el.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}));
-    el.dispatchEvent(new MouseEvent('mouseup', {bubbles:true}));
-    el.click();
+    const r = el.getBoundingClientRect();
+    const opts = {bubbles:true, cancelable:true, clientX:r.left+r.width/2, clientY:r.top+r.height/2};
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
     return true;
   };
-  const byText = (re) => [...document.querySelectorAll('button,a,div,span,[role=button]')]
-    .find(el => visible(el) && re.test(textOf(el)));
+  const byText = (re) => {
+    const lineCount = el => textOf(el).split(String.fromCharCode(10)).filter(Boolean).length;
+    const score = el => {
+      const cls = String(el.className || '');
+      const role = el.getAttribute('role') || '';
+      const txt = textOf(el);
+      return (el.matches('button,a,[role=button],[role=menuitem]') ? 100 : 0)
+        + (/lv_new_third_part_sign_in_expand-button|login-button/i.test(cls) ? 200 : 0)
+        + (/lv_new_third_part_sign_in_expand-wrapper/i.test(cls) ? 60 : 0)
+        + (role === 'menuitem' ? 30 : 0)
+        + (lineCount(el) === 1 ? 100 : 0)
+        - txt.length / 10
+        - lineCount(el) * 60
+        - el.querySelectorAll('*').length;
+    };
+    const clickSelector = '.lv_new_third_part_sign_in_expand-button,.login-button-CK3g2c,button,a,[role=button],[role=menuitem]';
+    return [...document.querySelectorAll('button,a,[role=button],[role=menuitem],div,span')]
+      .filter(el => visible(el) && re.test(textOf(el)))
+      .map(el => {
+        const matchingChildren = [...(el.querySelectorAll?.(clickSelector) || [])].filter(c => visible(c) && re.test(textOf(c)));
+        return matchingChildren.sort((a, b) => score(b) - score(a))[0] || (el.closest(clickSelector) && re.test(textOf(el.closest(clickSelector))) ? el.closest(clickSelector) : null) || el;
+      })
+      .filter((el, idx, arr) => arr.indexOf(el) === idx)
+      .sort((a, b) => score(b) - score(a))[0];
+  };
   const setValue = (el, value) => {
     if (!el) return false;
     el.focus();
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
     if (setter) setter.call(el, value); else el.value = value;
-    el.dispatchEvent(new Event('input',{bubbles:true}));
+    el.dispatchEvent(new InputEvent('input',{bubbles:true, inputType:'insertText', data:String(value)}));
     el.dispatchEvent(new Event('change',{bubbles:true}));
     return true;
   };
-  const loginRe = /^(log in|sign in|login|continue|登录|登入|đăng nhập|dang nhap)$/i;
-  const nextRe = /^(log in|sign in|login|continue|next|submit|登录|登入|继续|下一步|tiếp tục|tiep tuc|kế tiếp|ke tiep|đăng nhập|dang nhap)$/i;
-
-  let loginBtn = byText(loginRe) || byText(/log in|sign in|登录|登入|đăng nhập|dang nhap/i);
-  if (loginBtn) { clickLike(loginBtn); await sleep(3000); }
-
-  let user, pass;
-  for (let i = 0; i < 8; i++) {
+  const findUser = () => {
     const inputs = [...document.querySelectorAll('input')].filter(visible);
-    user = inputs.find(i => /email|user|account|phone|mobile|login|mail|邮箱|账号|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')))
-      || inputs.find(i => i.type !== 'password')
-      || inputs[0];
-    if (user) break;
-    await sleep(1000);
+    return inputs.find(i => i.type === 'email' || /email|user|account|phone|mobile|login|mail|邮箱|郵箱|账号|帳號|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')));
+  };
+  const findPass = () => [...document.querySelectorAll('input')].find(i => visible(i) && (i.type === 'password' || /password|密码|密碼|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))));
+
+  // State machine: if email/password fields are already visible, never click
+  // the login method chooser again; repeated clicks reset the modal.
+  let user = findUser();
+  let pass = findPass();
+  if (!user || !pass) {
+    const emailOption = byText(/continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|電子郵件|电子邮件|邮箱|郵箱/i);
+    if (emailOption) { clickLike(emailOption); await sleep(3000); }
   }
-  const userSet = setValue(user, ${JSON.stringify(options.username)});
-  await sleep(800);
-  let next = byText(nextRe) || [...document.querySelectorAll('button,[role=button]')].find(b => visible(b) && !b.disabled && nextRe.test(textOf(b)));
-  if (next && ![...document.querySelectorAll('input')].some(i => visible(i) && i.type === 'password')) {
-    clickLike(next);
-    await sleep(2500);
+  for (let i = 0; i < 10; i++) {
+    user = findUser();
+    pass = findPass();
+    if (user && pass) break;
+    await sleep(800);
   }
 
-  for (let i = 0; i < 8; i++) {
-    pass = [...document.querySelectorAll('input')].find(i => visible(i) && (i.type === 'password' || /password|密码|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))));
-    if (pass) break;
-    await sleep(1000);
-  }
+  const userSet = setValue(user, ${JSON.stringify(options.username)});
+  await sleep(500);
   const passSet = setValue(pass, ${JSON.stringify(options.password)});
   await sleep(800);
-  const submit = byText(nextRe) || [...document.querySelectorAll('button,[role=button]')].find(b => visible(b) && !b.disabled);
+  const submitRe = /^(log in|sign in|login|continue|next|submit|登录|登入|繼續|继续|下一步|tiếp tục|tiep tuc|kế tiếp|ke tiep|đăng nhập|dang nhap)$/i;
+  const submit = byText(submitRe) || [...document.querySelectorAll('button,[role=button]')].filter(visible).find(b => !b.disabled && submitRe.test(textOf(b)));
   if (submit) clickLike(submit);
-  return { userSet, passSet, url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1000) };
-})()`);
-          await new Promise(r => setTimeout(r, 10000));
+  return { userSet, passSet, hasUser: !!user, hasPass: !!pass, submitted: !!submit, url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1200) };
+})()`, 45000);
+          } catch (e) {
+            // Clicking login/submit can navigate the page and make the Runtime.evaluate
+            // response disappear. Do not fail the whole login flow; keep the browser
+            // open so the user can finish captcha/2FA/manual login and then click 检测.
+            logger.warn(`Dreamina 自动填表未确认完成: ${e.message || e}`);
+          }
+          await new Promise(r => setTimeout(r, Number(process.env.DREAMINA_LOGIN_SETTLE_MS || 30000)));
+          await handleDreaminaPostSubmitRecovery(ws).catch(e => logger.warn(`Dreamina 登录恢复处理失败: ${e.message || e}`));
         }
 
         clearTimeout(timer);
@@ -473,7 +624,9 @@ export async function loginDreaminaViaBitBrowser(options: {
     ws.onerror = () => { clearTimeout(timer); reject(new Error("CDP websocket error")); };
   });
 
-  return await checkDreaminaLoginByCdp(opened.cdpPort, targetWs);
+  // The login click may navigate or replace the page target; rediscover the current
+  // Dreamina page instead of reusing a possibly stale WebSocket URL.
+  return await checkDreaminaLoginByCdp(opened.cdpPort);
 }
 
 export default BitBrowserClient;

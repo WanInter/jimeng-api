@@ -15,8 +15,8 @@
 - Certificate：`certificate/jimeng-api-tls`，状态 `Ready=True`
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `longhorn`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
-- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-vn-login-flow-20260624134411`
-- 当前镜像 digest：`sha256:050bb469c2debc8bef8c85e5ae1eb64ed922d32eff281a35e984dfd06245a4e9`
+- 当前镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-dreamina-email-regex-fix-20260624210238`
+- 当前镜像 digest：`sha256:1d21b88996c4c907b1cc27f373d1247a8b00bd6756da9ffd15f1d82a9c4cf4ff`
 - 镜像仓库：`hub.cs.waypeak.work/jimeng-api/jimeng-api`
 - Kaniko 构建 Namespace：`jimeng-api-build`
 - Kaniko registry Secret：`jimeng-api-registry-auth`
@@ -80,19 +80,64 @@
 - Digest：`sha256:b752719a5bf18900e42d4379e3de40e44a4ceaba55cd064b88aceb24ebb2a99a`
 - Deployment Ready：`1/1`，Pod：`jimeng-api-d78bbdb4d-zzh9q`。
 - 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`。
-- 已验证根页面包含 `登录/修复`、`高级`、`远程 BitBrowser 设置`；Pod 可通过 Tailscale 访问本机 `http://100.103.52.37:54345/browser/list`。
+- 已验证根页面包含 `登录/修复`、`高级`、`远程 BitBrowser 设置`；Pod 可通过 Tailscale 访问本机 `http://100.91.75.54:54345/browser/list`。
 
+
+- 2026-06-24：部署 BitBrowser API 超时修复版本。将后端连接 BitBrowser API 的默认超时从固定 `30000ms` 提高为可配置，默认 `120000ms`，支持通过 `BITBROWSER_API_TIMEOUT_MS` 覆盖，避免 BitBrowser 打开/启动窗口较慢时出现 `timeout of 30000ms exceeded` 导致登录失败。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-bitbrowser-timeout-20260624145358`
+- Digest：`sha256:99aa5273212dc42ca1e63fabf94b615b51cd24bcb030f34d1297853194d20ba0`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-65464d8fbf-nt4cw`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`，根路径返回 `即梦 API 管理控制台` HTML。
+
+
+- 2026-06-24：部署 CDP Runtime.evaluate 超时容错版本。修复 `cdpCall` 响应后未清理 timeout；自动填表阶段若因点击登录/提交触发页面跳转导致 `Runtime.evaluate` 不返回，不再直接判定登录失败，而是记录 warning、保持浏览器打开并继续检测/等待人工处理；最终检测会重新发现当前 Dreamina page WebSocket，避免复用跳转前旧 target。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-cdp-runtime-tolerant-20260624174840`
+- Digest：`sha256:a9c3e81c53e0eb0ad031c1add87d2157bf71fd04abe185a6627e32d548d9dc2b`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-d9d6896f6-h5gzk`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`。
+
+
+
+
+- 2026-06-24 本地调试更新：根据 Dreamina/CapCut 邮箱登录实测流程调整自动登录逻辑：默认打开 `https://dreamina.capcut.com/ai-tool/home?need_login=true`；优先真实 CDP 鼠标点击 `使用電子郵件繼續/使用邮箱继续/Continue with email`；如果已在邮箱/密码表单则跳过登录方式选择，避免重复点击导致退回选择页；提交后等待时间默认 30s；若出现 `發生錯誤/重新整理/重試` 等错误弹窗，会自动点击重新整理/重试或 reload，再等待 25s 后重新检测 cookies。已在本地 BitBrowser profile 中确认 `onyxholmesrwet@outlook.com` 登录态可检测，DB 状态为 `ok`。该修复已通过 `npm run build`，本地服务用 Node v22.22.1 启动验证；线上镜像待下一次 Kaniko 构建部署。
+
+
+
+- 2026-06-24：部署 Dreamina 邮箱登录恢复增强版本。包含本地调试确认的邮箱登录状态机、真实 CDP 鼠标点击、已在邮箱/密码页时跳过方式选择、提交后错误弹窗 `發生錯誤/重新整理/重試` 自动恢复、重新检测 session cookies 等修复。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-dreamina-email-login-recovery-20260624202452`
+- Digest：`sha256:645ff900c9768896305aaacb5c6283630752608a9e309450c7929e2c8d2a35e9`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-67df6c684f-rnpdl`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`，根路径返回管理后台 HTML。
+
+
+
+- 2026-06-24：部署 Dreamina 英文邮箱按钮点击修复版本。修复英文弹窗中上层容器文本同时包含 Google/TikTok/Facebook/email 时，点击候选可能误选第一个第三方按钮的问题；现在只优先选择自身文本匹配 `Continue with email` 的最小可点击元素/按钮。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-dreamina-email-click-fix-20260624204715`
+- Digest：`sha256:7189ec49d534323281126c82e03598fb18b3df8419e003a04f129f9ad2ec4888`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-578f68d8bd-r5qrx`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`。
+
+
+
+- 2026-06-24：部署 Dreamina 登录注入脚本正则语法修复版本。上一版英文按钮点击修复中，注入页面执行的 JS 使用 `split(/\n+/)` 在模板字符串内被转义成非法跨行正则，线上日志出现 `SyntaxError: Invalid regular expression: missing /`，导致自动填表逻辑未继续执行；本版改为 `split(String.fromCharCode(10))`，已本地验证注入脚本不再 SyntaxError。
+- 镜像：`hub.cs.waypeak.work/jimeng-api/jimeng-api:prod-dreamina-email-regex-fix-20260624210238`
+- Digest：`sha256:1d21b88996c4c907b1cc27f373d1247a8b00bd6756da9ffd15f1d82a9c4cf4ff`
+- Deployment Ready：`1/1`，Pod：`jimeng-api-75c68b56d4-cdzw7`。
+- 健康检查：`/ping` 返回 `pong`，`/dashboard/status` 返回 `{"setupComplete":true}`。
 
 ## 远程 BitBrowser / Tailscale 连接
 
-- 本机 BitBrowser Tailscale IP：`100.103.52.37`
-- 线上后台 `远程浏览器` 设置已写入：`BitBrowser API 地址 = http://100.103.52.37:54345`
-- CDP 地址无需手动配置：服务调用 `/browser/open` 时会附加 `--remote-debugging-address=0.0.0.0`，并根据返回端口自动推导 `http://100.103.52.37:<cdp-port>`。
+- 本机 BitBrowser Tailscale IP：`100.91.75.54`
+- 线上后台 `远程浏览器` 设置已写入：`BitBrowser API 地址 = http://100.91.75.54:54345`
+- CDP 地址无需手动配置：服务调用 `/browser/open` 时会附加 `--remote-debugging-address=0.0.0.0`，并根据返回端口自动推导 `http://100.91.75.54:<cdp-port>`。
 - 已验证远程 k3s 节点和 `jimeng-api` Pod 可访问：
-  - `http://100.103.52.37:54345/browser/list`
-  - `/browser/open` 返回的 CDP 端口，例如 `http://100.103.52.37:59186/json/version`
+  - `http://100.91.75.54:54345/browser/list`
+  - `/browser/open` 返回的 CDP 端口，例如 `http://100.91.75.54:52060/json/version`
 - 已加入 Tailscale 的 k3s 节点：`node196=100.71.5.102`、`node4=100.100.223.4`、`node53=100.74.68.124`、`node2/company=100.83.241.120`、`node204=100.94.246.89`、`node224=100.67.198.35`。
 - 安全注意：BitBrowser API/CDP 仅通过 Tailscale IP 使用，不建议暴露到公网。
+
+
+- 2026-06-24：BitBrowser Tailscale 地址修正：旧地址 `100.103.52.37` 对应设备已离线，导致线上调用 `/browser/open` 卡住直到 `timeout of 120000ms exceeded` 且无法拉起浏览器；已将后台 `bitbrowser_api_base` 改为当前在线的 `http://100.91.75.54:54345`，并验证 Pod 可访问 `/browser/list` 与 CDP `http://100.91.75.54:52060/json/version`。
 
 ## 关键文件
 

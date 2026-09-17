@@ -39,31 +39,53 @@ function parseLoginAccountLines(raw: string): any[] {
   }).filter(Boolean);
 }
 
-async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any; runningContext?: any }> {
-  if (account.bitbrowser_profile_id) return { profileId: account.bitbrowser_profile_id, autoBound: false };
+function accountProfileTargets(account: any): string[] {
+  return [account.login_username, account.username, account.name]
+    .map(v => String(v || '').trim().toLowerCase())
+    .filter(v => v && v !== 'unknown');
+}
 
-  // 1) 先按账号邮箱/名称匹配 BitBrowser profile 列表。
+function profileBelongsToAccount(account: any, profile: any): boolean {
+  const targets = accountProfileTargets(account);
+  if (!targets.length) return true;
+  const fields = [profile?.name, profile?.userName, profile?.username]
+    .map(v => String(v || '').trim().toLowerCase())
+    .filter(Boolean);
+  return targets.some(t => fields.includes(t));
+}
+
+async function resolveBitBrowserProfile(account: any, client: BitBrowserClient): Promise<{ profileId: string; autoBound: boolean; matchedProfile?: any; runningContext?: any }> {
+  // 1) If a profile is already bound, use it directly. Do not scan the whole
+  // BitBrowser list before every login: the local API rate-limits pagination and
+  // can fail with “请求频繁”, preventing the real login flow from even starting.
+  if (account.bitbrowser_profile_id) {
+    return { profileId: String(account.bitbrowser_profile_id), autoBound: false };
+  }
+
+  // 2) Match by exact account email/name from BitBrowser profile list.
   const matched = await client.findProfileForAccount(account);
   if (matched?.id) {
     db.updateAccountBitBrowserProfile(Number(account.id), String(matched.id));
     return { profileId: String(matched.id), autoBound: true, matchedProfile: matched };
   }
 
-  // 2) 再扫描已经运行的 BitBrowser/CDP 窗口：如果打开了 Dreamina 页面，
-  //    从 BitBrowser 工作台 URL 中提取 profile id，并顺便记录 CDP 端口。
-  const running = await discoverRunningDreaminaContext([account.cdp_port]);
-  if (running?.profileId) {
-    db.updateAccountBitBrowserProfile(Number(account.id), running.profileId);
-    db.updateAccountBitBrowserRuntime(Number(account.id), {
-      cdp_port: running.cdpPort,
-      cdp_ws_url: running.pageWsUrl || '',
-      bitbrowser_window_id: running.profileId,
-    });
-    return { profileId: running.profileId, autoBound: true, runningContext: running };
+  // 3) Only use an already-running Dreamina context for accounts without a
+  // login username. For imported username/password accounts this fallback is
+  // unsafe because it can bind the current account to another user's open tab.
+  if (!account.login_username) {
+    const running = await discoverRunningDreaminaContext([account.cdp_port]);
+    if (running?.profileId) {
+      db.updateAccountBitBrowserProfile(Number(account.id), running.profileId);
+      db.updateAccountBitBrowserRuntime(Number(account.id), {
+        cdp_port: running.cdpPort,
+        cdp_ws_url: running.pageWsUrl || '',
+        bitbrowser_window_id: running.profileId,
+      });
+      return { profileId: running.profileId, autoBound: true, runningContext: running };
+    }
   }
 
-  // 3) 仍未找到时，按账号邮箱自动创建 BitBrowser profile 并绑定。
-  //    这样正式批量导入账号后无需预先在 BitBrowser 手工建窗口。
+  // 4) Create a dedicated BitBrowser profile for this account.
   if (account.login_username || account.name) {
     const created = await client.createProfileForAccount(account);
     if (created?.id) {
