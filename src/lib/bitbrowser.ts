@@ -340,11 +340,54 @@ async function waitForPageWs(port: number, timeoutMs = 60000): Promise<string> {
   throw lastError || new Error(`Dreamina page not found on CDP port ${port}`);
 }
 
-async function evalOnPage<T = any>(ws: WebSocket, expression: string, timeoutMs = 30000): Promise<T> {
-  const result = await cdpCall(ws, "Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
+async function evalOnPage<T = any>(ws: WebSocket, expression: string, timeoutMs = 30000, contextId?: number): Promise<T> {
+  const params: any = { expression, awaitPromise: true, returnByValue: true };
+  if (typeof contextId === 'number') params.contextId = contextId;
+  const result = await cdpCall(ws, "Runtime.evaluate", params, timeoutMs);
   const remote = result?.result;
   if (remote?.subtype === "error") throw new Error(remote?.description || remote?.value || "Runtime.evaluate failed");
   return remote?.value as T;
+}
+
+/**
+ * Dreamina 的第三方登录弹窗常渲染在同源 iframe 中；主 frame 里 querySelectorAll('input')
+ * 找不到邮箱/密码框，导致状态机反复点击"使用电子邮件继续"却停在原地。
+ * 这里枚举所有 execution context（主 frame + 各 iframe），返回第一个满足条件的 contextId。
+ */
+async function findContextIdWhere(ws: WebSocket, predicateExpr: string): Promise<number | undefined> {
+  const contexts = await collectExecutionContexts(ws);
+  for (const ctx of contexts) {
+    const hit = await evalOnPage<boolean>(ws, predicateExpr, 10000, ctx).catch(() => false);
+    if (hit) return ctx;
+  }
+  return undefined;
+}
+
+/**
+ * 通过 Page.getFrameTree + Runtime.executionContextCreated 事件收集可用 contextId。
+ * Runtime.enable 会为每个已存在的 context 重放 executionContextCreated 事件。
+ */
+async function collectExecutionContexts(ws: WebSocket, waitMs = 1200): Promise<Array<number | undefined>> {
+  const ids = new Set<number>();
+  const onMessage = (ev: MessageEvent) => {
+    try {
+      const msg = JSON.parse(String(ev.data));
+      if (msg.method === 'Runtime.executionContextCreated' && typeof msg.params?.context?.id === 'number') {
+        ids.add(msg.params.context.id);
+      }
+    } catch { /* 忽略非 JSON 帧 */ }
+  };
+  ws.addEventListener('message', onMessage as any);
+  try {
+    // 先 disable 再 enable，强制重放全部已存在 context（含 iframe）。
+    await cdpCall(ws, 'Runtime.disable', {}, 5000).catch(() => null);
+    await cdpCall(ws, 'Runtime.enable', {}, 5000).catch(() => null);
+    await new Promise(r => setTimeout(r, waitMs));
+  } finally {
+    ws.removeEventListener('message', onMessage as any);
+  }
+  // undefined 代表默认（主 frame）context，始终最先尝试。
+  return [undefined, ...ids];
 }
 
 async function navigateAndWait(ws: WebSocket, url: string) {
@@ -354,10 +397,22 @@ async function navigateAndWait(ws: WebSocket, url: string) {
   await new Promise(r => setTimeout(r, 5000));
 }
 
-async function clickTextByCdp(ws: WebSocket, pattern: string, flags = 'i'): Promise<boolean> {
+/**
+ * 可见性判断不能用 offsetParent：按 CSS 规范，position:fixed 元素的 offsetParent 为 null，
+ * 而 Dreamina 登录弹窗正是 fixed 定位，会导致弹窗内的元素被误判为不可见。
+ */
+const VISIBLE_FN = `el => {
+  if (!el || !el.isConnected) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return false;
+  const s = getComputedStyle(el);
+  return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) !== 0;
+}`;
+
+async function clickTextByCdp(ws: WebSocket, pattern: string, flags = 'i', contextId?: number): Promise<boolean> {
   const expression = `(() => {
     const re = new RegExp(${JSON.stringify(pattern)}, ${JSON.stringify(flags)});
-    const visible = el => !!(el && el.offsetParent !== null);
+    const visible = ${VISIBLE_FN};
     const textOf = el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
     const lineCount = el => textOf(el).split(String.fromCharCode(10)).filter(Boolean).length;
     const score = el => {
@@ -391,29 +446,91 @@ async function clickTextByCdp(ws: WebSocket, pattern: string, flags = 'i'): Prom
       .sort((a, b) => score(b) - score(a));
     const el = candidates[0];
     if (!el) return null;
-    el.scrollIntoView({ block: 'center', inline: 'center' });
+    // 先滚动，坐标在下一次调用里再取，避免平滑滚动未结束导致坐标失效。
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    window.__jmClickTarget = el;
     const r = el.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: textOf(el).slice(0, 120), tag: el.tagName, role: el.getAttribute('role'), cls: String(el.className || '').slice(0, 120) };
+    // Input.dispatchMouseEvent 使用顶层 viewport 坐标；若元素位于 iframe 中，
+    // getBoundingClientRect 返回的是 iframe 内部坐标，必须叠加各层 iframe 的偏移。
+    let offsetX = 0, offsetY = 0, w = window, guard = 0;
+    while (w !== w.parent && guard++ < 10) {
+      try {
+        const fr = w.frameElement;
+        if (!fr) break;
+        const fb = fr.getBoundingClientRect();
+        offsetX += fb.left; offsetY += fb.top;
+        w = w.parent;
+      } catch { break; }
+    }
+    return {
+      x: r.left + r.width / 2 + offsetX,
+      y: r.top + r.height / 2 + offsetY,
+      w: r.width, h: r.height,
+      inFrame: offsetX !== 0 || offsetY !== 0,
+      text: textOf(el).slice(0, 120), tag: el.tagName,
+      role: el.getAttribute('role'), cls: String(el.className || '').slice(0, 120)
+    };
   })()`;
-  const result = await cdpCall(ws, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, 15000);
+  const params: any = { expression, returnByValue: true, awaitPromise: true };
+  if (typeof contextId === 'number') params.contextId = contextId;
+  const result = await cdpCall(ws, 'Runtime.evaluate', params, 15000);
   const target = result?.result?.value;
   if (!target || typeof target.x !== 'number' || typeof target.y !== 'number') return false;
-  logger.info(`CDP 点击文本: ${target.text} (${target.tag}${target.role ? '/' + target.role : ''})`);
+  if (!(target.w > 0 && target.h > 0)) {
+    logger.warn(`CDP 点击目标尺寸为 0，跳过点击: ${target.text} (${target.tag})`);
+    return false;
+  }
+  logger.info(`CDP 点击文本: ${target.text} (${target.tag}${target.role ? '/' + target.role : ''}) at ${Math.round(target.x)},${Math.round(target.y)}${target.inFrame ? ' [iframe]' : ''}`);
   await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y, button: 'none' }, 5000);
   await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', clickCount: 1 }, 5000);
   await cdpCall(ws, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', clickCount: 1 }, 5000);
+
+  // 真实鼠标点击可能被遮罩层拦截；补一次目标元素上的直接 DOM click 作为兜底。
+  await evalOnPage(ws, `(() => {
+    const el = window.__jmClickTarget;
+    if (!el || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+    delete window.__jmClickTarget;
+    return true;
+  })()`, 10000, contextId).catch(() => false);
   return true;
 }
 
 
-async function hasDreaminaCredentialFields(ws: WebSocket): Promise<boolean> {
-  return await evalOnPage<boolean>(ws, `(() => {
-    const visible = el => !!(el && el.offsetParent !== null);
-    const inputs = [...document.querySelectorAll('input')].filter(visible);
-    const hasUser = inputs.some(i => i.type === 'email' || /email|user|account|phone|mobile|login|mail|邮箱|郵箱|账号|帳號|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')));
-    const hasPass = inputs.some(i => i.type === 'password' || /password|密码|密碼|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' ')));
-    return hasUser && hasPass;
-  })()`, 15000);
+const PASS_INPUT_FN = `i => i.type === 'password' || /password|passwd|pwd|密码|密碼|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))`;
+
+/**
+ * 邮箱框只在同一表单/弹窗里存在密码框时才认定，避免匹配到首页的搜索框或提示词框。
+ * 之前的松散正则在首页就能命中 input，导致把账号填进生成提示框。
+ */
+/**
+ * 判定登录表单是否已就绪。Dreamina 是两步式：第一步弹窗只有邮箱框，密码框要提交后才出现，
+ * 所以"只有邮箱框"也算已进入表单，不能再去点登录方式选择按钮（会重置弹窗）。
+ * 同时要求该输入框位于登录弹窗/表单内，避免把首页提示词框当成登录表单。
+ */
+const CREDENTIAL_FIELDS_EXPR = `(() => {
+  const visible = ${VISIBLE_FN};
+  const isPass = ${PASS_INPUT_FN};
+  const inputs = [...document.querySelectorAll('input')].filter(visible);
+  if (inputs.find(isPass)) return true;
+  const LOGIN_SCOPE_SEL = 'form,[role=dialog],[class*=modal],[class*=login],[class*=sign],[class*=Login],[class*=Sign]';
+  return inputs.some(i => {
+    if (i.type !== 'email' && !/email|e-mail|邮箱|郵箱/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))) return false;
+    return !!i.closest(LOGIN_SCOPE_SEL);
+  });
+})()`;
+
+/** 返回承载邮箱/密码表单的 contextId；undefined 表示主 frame 或未找到。 */
+async function findCredentialContextId(ws: WebSocket): Promise<number | undefined> {
+  return await findContextIdWhere(ws, CREDENTIAL_FIELDS_EXPR);
+}
+
+async function hasDreaminaCredentialFields(ws: WebSocket, contextId?: number): Promise<boolean> {
+  return await evalOnPage<boolean>(ws, CREDENTIAL_FIELDS_EXPR, 15000, contextId);
 }
 
 async function getPageSnapshot(ws: WebSocket, limit = 3000): Promise<{ url: string; title: string; text: string; cookies: string; ua: string }> {
@@ -489,6 +606,8 @@ export async function loginDreaminaViaBitBrowser(options: {
   const pageWsUrl = wsUrl.includes("/devtools/page/") ? wsUrl : undefined;
   const targetWs = pageWsUrl || await waitForPageWs(opened.cdpPort, 60000);
   const ws = new WebSocket(targetWs);
+  // 自动填表的诊断结果需要在 Promise 之外可见，以便写入登录状态提示。
+  let fillOutcome: any = null;
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => { try { ws.close(); } catch {}; reject(new Error("Dreamina login automation timeout")); }, 120000);
@@ -509,24 +628,46 @@ export async function loginDreaminaViaBitBrowser(options: {
           // synthetic DOM click events on these login controls. If the credential
           // form is already visible, do not click the login-method chooser again;
           // doing so can reset the modal back to the method selection page.
-          const alreadyAtCredentialForm = await hasDreaminaCredentialFields(ws).catch(() => false);
+          const EMAIL_OPTION_RE = '使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|電子郵件|电子邮件|邮箱|郵箱';
+
+          // 登录弹窗可能在 iframe 内：先在所有 execution context 里找凭据表单。
+          let credCtx = await findCredentialContextId(ws).catch(() => undefined);
+          const alreadyAtCredentialForm = credCtx !== undefined
+            || await hasDreaminaCredentialFields(ws).catch(() => false);
+
           if (!alreadyAtCredentialForm) {
-            const emailClickedFirst = await clickTextByCdp(ws, '使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|電子郵件|电子邮件|邮箱|郵箱').catch(() => false);
-            if (emailClickedFirst) await new Promise(r => setTimeout(r, 2500));
-            if (!emailClickedFirst) {
-              await clickTextByCdp(ws, '^(log in|sign in|login|continue|登录|登入|đăng nhập|dang nhap)$').catch(() => false);
-              await new Promise(r => setTimeout(r, 2500));
-              await clickTextByCdp(ws, '使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|電子郵件|电子邮件|邮箱|郵箱').catch(() => false);
-              await new Promise(r => setTimeout(r, 2500));
+            // 登录方式选择按钮同样可能在 iframe 内，逐个 context 尝试点击。
+            const clickInAnyContext = async (pattern: string): Promise<boolean> => {
+              for (const ctx of await collectExecutionContexts(ws)) {
+                if (await clickTextByCdp(ws, pattern, 'i', ctx).catch(() => false)) return true;
+              }
+              return false;
+            };
+
+            // 分阶段推进，每步验证是否已出现凭据表单，避免在首页空点或重复点击重置弹窗。
+            // 阶段一：页面可能仍是未登录首页（日志实测文本为 "Sign in to start creating"），
+            // 需要先打开登录弹窗；?need_login=true 并不保证弹窗自动弹出。
+            const SIGN_IN_RE = '^\\s*(sign in|sign up|log in|login|登录|登入|登錄|đăng nhập|dang nhap)\\s*$';
+            for (const stage of [SIGN_IN_RE, EMAIL_OPTION_RE] as const) {
+              credCtx = await findCredentialContextId(ws).catch(() => undefined);
+              if (credCtx !== undefined) break;
+              const clicked = await clickInAnyContext(stage);
+              logger.info(`Dreamina 登录阶段点击 ${clicked ? '成功' : '未命中'}: ${stage === SIGN_IN_RE ? 'Sign in' : 'Continue with email'}`);
+              await new Promise(r => setTimeout(r, 3000));
+            }
+            // 弹窗切换后表单可能落在新的 iframe context，重新定位。
+            credCtx = await findCredentialContextId(ws).catch(() => undefined);
+            if (credCtx === undefined && !await hasDreaminaCredentialFields(ws).catch(() => false)) {
+              logger.warn('Dreamina 登录弹窗未出现邮箱/密码表单，将继续尝试填表并输出页面诊断信息');
             }
           } else {
-            logger.info('Dreamina 已在邮箱/密码表单，跳过登录方式选择点击');
+            logger.info(`Dreamina 已在邮箱/密码表单，跳过登录方式选择点击${credCtx !== undefined ? ` (iframe context ${credCtx})` : ''}`);
           }
           try {
-            await evalOnPage(ws, `
+            const fillResult = await evalOnPage<any>(ws, `
 (async()=>{
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const visible = el => !!(el && el.offsetParent !== null);
+  const visible = ${VISIBLE_FN};
   const textOf = el => (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
   const clickLike = el => {
     if (!el) return false;
@@ -572,36 +713,126 @@ export async function loginDreaminaViaBitBrowser(options: {
     el.dispatchEvent(new Event('change',{bubbles:true}));
     return true;
   };
+  const isPass = ${PASS_INPUT_FN};
+  const findPass = () => [...document.querySelectorAll('input')].filter(visible).find(isPass);
+  const USER_RE = /email|e-mail|user|account|phone|mobile|login|mail|邮箱|郵箱|账号|帳號|tài khoản|tai khoan/i;
+  // 账号框必须落在登录弹窗/表单范围内，避免误取首页提示词框（实测 hasUser 曾在首页误判为 true）。
+  const LOGIN_SCOPE_SEL = 'form,[role=dialog],[class*=modal],[class*=login],[class*=sign],[class*=Login],[class*=Sign]';
   const findUser = () => {
     const inputs = [...document.querySelectorAll('input')].filter(visible);
-    return inputs.find(i => i.type === 'email' || /email|user|account|phone|mobile|login|mail|邮箱|郵箱|账号|帳號|tài khoản|tai khoan/i.test([i.name,i.id,i.placeholder,i.type,i.autocomplete].join(' ')));
+    const pass = inputs.find(isPass);
+    const scope = (pass || inputs.find(i => i.type === 'email'))?.closest(LOGIN_SCOPE_SEL);
+    const pool = scope ? inputs.filter(i => scope.contains(i)) : inputs;
+    return pool.find(i => i !== pass && (i.type === 'email' || (i.type === 'text' && USER_RE.test([i.name,i.id,i.placeholder,i.autocomplete].join(' ')))));
   };
-  const findPass = () => [...document.querySelectorAll('input')].find(i => visible(i) && (i.type === 'password' || /password|密码|密碼|mật khẩu|mat khau/i.test([i.name,i.id,i.placeholder,i.autocomplete].join(' '))));
+  const submitRe = /^(log in|sign in|login|continue|next|submit|登录|登入|繼續|继续|下一步|tiếp tục|tiep tuc|kế tiếp|ke tiep|đăng nhập|dang nhap)$/i;
+  // 从输入框向上逐层查找最近的提交按钮，绝不退化为全文档搜索。
+  // 全文档搜索会命中页面右上角的全局 "Sign in"（DOM 顺序早于弹窗），
+  // 点击它等于重新打开登录弹窗，导致流程退回登录方式选择页。
+  const findSubmit = (anchor) => {
+    if (!anchor) return null;
+    let el = anchor.parentElement, guard = 0;
+    while (el && el !== document.body && guard++ < 12) {
+      const btns = [...el.querySelectorAll('button,[role=button],[type=submit]')]
+        .filter(visible)
+        .filter(b => !b.disabled && submitRe.test(textOf(b)));
+      if (btns.length) return btns[btns.length - 1];
+      el = el.parentElement;
+    }
+    return null;
+  };
 
-  // State machine: if email/password fields are already visible, never click
-  // the login method chooser again; repeated clicks reset the modal.
+  // Dreamina/CapCut 采用两步式邮箱登录（实测截图确认）：
+  // 第一步弹窗只有 "Enter email" + Continue，提交后密码框才渲染出来。
+  // 因此不能要求邮箱框和密码框同时存在，否则流程会在第一步死锁。
+  const trace = [];
   let user = findUser();
   let pass = findPass();
-  if (!user || !pass) {
+
+  if (!user && !pass) {
     const emailOption = byText(/continue.*(email|e-mail)|email.*continue|tiếp tục bằng email|tiep tuc bang email|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*繼續|使用.*(電子郵件|电子邮件|電郵|郵箱|邮箱).*继续|電子郵件|电子邮件|邮箱|郵箱/i);
-    if (emailOption) { clickLike(emailOption); await sleep(3000); }
-  }
-  for (let i = 0; i < 10; i++) {
+    if (emailOption) { clickLike(emailOption); trace.push('clicked-email-option'); await sleep(3000); }
     user = findUser();
     pass = findPass();
-    if (user && pass) break;
-    await sleep(800);
   }
 
-  const userSet = setValue(user, ${JSON.stringify(options.username)});
-  await sleep(500);
-  const passSet = setValue(pass, ${JSON.stringify(options.password)});
-  await sleep(800);
-  const submitRe = /^(log in|sign in|login|continue|next|submit|登录|登入|繼續|继续|下一步|tiếp tục|tiep tuc|kế tiếp|ke tiep|đăng nhập|dang nhap)$/i;
-  const submit = byText(submitRe) || [...document.querySelectorAll('button,[role=button]')].filter(visible).find(b => !b.disabled && submitRe.test(textOf(b)));
-  if (submit) clickLike(submit);
-  return { userSet, passSet, hasUser: !!user, hasPass: !!pass, submitted: !!submit, url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1200) };
-})()`, 45000);
+  let userSet = false, passSet = false, submitted = false, emailStepSubmitted = false;
+
+  // 第一步：填邮箱并提交（密码框尚未出现时）
+  if (user && !pass) {
+    userSet = setValue(user, ${JSON.stringify(options.username)});
+    trace.push('filled-email');
+    await sleep(600);
+    const next = findSubmit(user);
+    if (next) {
+      clickLike(next);
+      emailStepSubmitted = true;
+      submitted = true;
+      trace.push('submitted-email-step:' + textOf(next).slice(0, 30));
+    } else {
+      trace.push('email-step-submit-not-found');
+    }
+    // 等待密码框渲染（可能伴随弹窗内容替换或验证码）
+    for (let i = 0; i < 15; i++) {
+      await sleep(1000);
+      pass = findPass();
+      if (pass) { trace.push('password-field-appeared-after-' + (i + 1) + 's'); break; }
+    }
+  }
+
+  // 第二步：填密码并提交
+  if (pass) {
+    const u = findUser();
+    // 第二步页面若仍带邮箱框且为空，补填一次（部分实现会保留该字段）。
+    if (u && !u.value) { userSet = setValue(u, ${JSON.stringify(options.username)}) || userSet; await sleep(400); }
+    passSet = setValue(pass, ${JSON.stringify(options.password)});
+    trace.push('filled-password');
+    await sleep(800);
+    const submit = findSubmit(pass);
+    if (submit) { clickLike(submit); submitted = true; trace.push('submitted-password-step:' + textOf(submit).slice(0, 30)); }
+    else trace.push('password-step-submit-not-found');
+
+    // 校验提交结果：若弹窗退回登录方式选择页（出现 Continue with Google/Facebook/TikTok），
+    // 说明点到的是全局 Sign in 而非表单内提交按钮，需要明确报出而不是静默成功。
+    if (submitted) {
+      for (let i = 0; i < 8; i++) {
+        await sleep(1000);
+        const t = document.body?.innerText || '';
+        const backToChooser = /continue with (google|facebook|tiktok|capcut mobile)/i.test(t);
+        if (backToChooser) { trace.push('regressed-to-method-chooser-after-' + (i + 1) + 's'); break; }
+        if (!findPass()) { trace.push('password-form-closed-after-' + (i + 1) + 's'); break; }
+      }
+    }
+  }
+
+  const hasUser = !!findUser() || userSet;
+  const hasPass = !!pass;
+  const regressed = trace.some(t => t.startsWith('regressed-to-method-chooser'));
+  return {
+    userSet, passSet, hasUser, hasPass, submitted, emailStepSubmitted, trace,
+    reason: regressed ? 'regressed-to-method-chooser'
+      : (!hasUser && !hasPass) ? 'credential-form-not-found'
+      : (!hasPass ? 'password-step-not-reached' : ''),
+    inputs: [...document.querySelectorAll('input')].filter(visible).map(i => ({ type: i.type, name: i.name, id: i.id, ph: i.placeholder })).slice(0, 10),
+    url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1200)
+  };
+})()`, 45000, credCtx);
+            // 之前这里丢弃了返回值，导致"表单没找到"和"填了没提交"在日志里无法区分。
+            fillOutcome = fillResult || null;
+            if (fillOutcome) {
+              logger.info(`Dreamina 自动填表结果: hasUser=${fillOutcome.hasUser} hasPass=${fillOutcome.hasPass} userSet=${fillOutcome.userSet} passSet=${fillOutcome.passSet} submitted=${fillOutcome.submitted} 步骤=[${(fillOutcome.trace || []).join(' -> ')}] url=${fillOutcome.url}`);
+              if (fillOutcome.reason === 'regressed-to-method-chooser') {
+                logger.warn('Dreamina 提交后退回登录方式选择页，说明点击的按钮不在凭据表单内或凭据被拒绝。请确认账号密码是否正确');
+              } else if (fillOutcome.reason === 'password-step-not-reached') {
+                logger.warn(`Dreamina 邮箱已提交但密码框未出现（可能触发验证码或需邮箱验证码登录）。可见 input: ${JSON.stringify(fillOutcome.inputs || [])}`);
+                logger.warn(`Dreamina 页面文本片段: ${String(fillOutcome.text || '').replace(/\s+/g, ' ').slice(0, 300)}`);
+              } else if (!fillOutcome.hasUser && !fillOutcome.hasPass) {
+                logger.warn(`Dreamina 未找到邮箱/密码输入框${credCtx !== undefined ? ` (context ${credCtx})` : ' (主 frame)'}，已跳过填写避免误填。可见 input: ${JSON.stringify(fillOutcome.inputs || [])}`);
+                logger.warn(`Dreamina 页面文本片段: ${String(fillOutcome.text || '').replace(/\s+/g, ' ').slice(0, 300)}`);
+              } else if (!fillOutcome.submitted) {
+                logger.warn('Dreamina 已填入邮箱/密码但未找到可点击的提交按钮，请在 BitBrowser 中手动提交后点击"检测"');
+              }
+            }
           } catch (e) {
             // Clicking login/submit can navigate the page and make the Runtime.evaluate
             // response disappear. Do not fail the whole login flow; keep the browser
@@ -626,7 +857,25 @@ export async function loginDreaminaViaBitBrowser(options: {
 
   // The login click may navigate or replace the page target; rediscover the current
   // Dreamina page instead of reusing a possibly stale WebSocket URL.
-  return await checkDreaminaLoginByCdp(opened.cdpPort);
+  const finalResult = await checkDreaminaLoginByCdp(opened.cdpPort);
+
+  // 登录未成功时，把自动填表的实际卡点带回后台，避免只显示"登录未确认"。
+  if (finalResult.status !== 'ok' && !finalResult.message && options.username && options.password) {
+    if (!fillOutcome) {
+      finalResult.message = '自动填表未返回结果（页面可能已跳转），请在 BitBrowser 中确认后点击“检测”';
+    } else if (fillOutcome.reason === 'regressed-to-method-chooser') {
+      finalResult.message = '提交后退回登录方式选择页，可能是账号密码错误或被拒绝，请核对凭据';
+    } else if (fillOutcome.reason === 'password-step-not-reached') {
+      finalResult.message = '邮箱已提交但密码框未出现，可能需要邮箱验证码，请在 BitBrowser 中人工完成';
+    } else if (!fillOutcome.hasUser || !fillOutcome.hasPass) {
+      finalResult.message = '未找到邮箱/密码输入框，登录弹窗结构可能已变化或仍停留在登录方式选择页';
+    } else if (!fillOutcome.submitted) {
+      finalResult.message = '已填入邮箱/密码但未找到提交按钮，请在 BitBrowser 中手动提交';
+    } else {
+      finalResult.message = '已提交登录但未检测到会话 cookie，可能需要人工完成验证码/二次验证';
+    }
+  }
+  return finalResult;
 }
 
 export default BitBrowserClient;
