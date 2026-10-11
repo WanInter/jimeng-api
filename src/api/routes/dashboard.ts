@@ -624,6 +624,20 @@ export default {
       return { success: true, message: '账号已删除' };
     },
 
+    // 删除媒体记录
+    '/media': async (request: Request) => {
+      requireAuth(request);
+      const id = parseInt(request.query.id as string);
+      if (!id) {
+        return new Response({ error: '缺少媒体ID' }, { statusCode: 400 });
+      }
+      const deleted = db.deleteMedia(id);
+      if (!deleted) {
+        return new Response({ error: '媒体记录不存在' }, { statusCode: 404 });
+      }
+      return { success: true, message: '媒体已删除' };
+    },
+
     // 删除API Key
     '/api-keys': async (request: Request) => {
       requireAuth(request);

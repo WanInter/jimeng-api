@@ -387,6 +387,11 @@ export function getMedia(page: number = 1, limit: number = 20, type?: string) {
   };
 }
 
+export function deleteMedia(id: number): boolean {
+  const result = db.prepare('DELETE FROM media WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
 // ==================== 日志管理 ====================
 
 const MAX_LOGS = 1000;
@@ -687,6 +692,7 @@ export default {
   getStats,
   saveMedia,
   getMedia,
+  deleteMedia,
   addLog,
   getLogs,
   clearLogs,
