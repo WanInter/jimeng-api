@@ -624,9 +624,18 @@ export default {
       return { success: true, message: '账号已删除' };
     },
 
-    // 删除媒体记录
+    // 删除媒体记录（支持单个 id 或逗号分隔的 ids 批量删除）
     '/media': async (request: Request) => {
       requireAuth(request);
+      const idsParam = request.query.ids as string;
+      if (idsParam) {
+        const ids = idsParam.split(',').map(s => parseInt(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+        if (!ids.length) {
+          return new Response({ error: '缺少有效的媒体ID' }, { statusCode: 400 });
+        }
+        const deleted = db.deleteMediaMany(ids);
+        return { success: true, deleted, message: `已删除 ${deleted} 条媒体记录` };
+      }
       const id = parseInt(request.query.id as string);
       if (!id) {
         return new Response({ error: '缺少媒体ID' }, { statusCode: 400 });

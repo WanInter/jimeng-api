@@ -392,6 +392,18 @@ export function deleteMedia(id: number): boolean {
   return result.changes > 0;
 }
 
+export function deleteMediaMany(ids: number[]): number {
+  const stmt = db.prepare('DELETE FROM media WHERE id = ?');
+  let deleted = 0;
+  const runAll = db.transaction((list: number[]) => {
+    for (const id of list) {
+      deleted += stmt.run(id).changes;
+    }
+  });
+  runAll(ids);
+  return deleted;
+}
+
 // ==================== 日志管理 ====================
 
 const MAX_LOGS = 1000;
@@ -693,6 +705,7 @@ export default {
   saveMedia,
   getMedia,
   deleteMedia,
+  deleteMediaMany,
   addLog,
   getLogs,
   clearLogs,

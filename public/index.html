@@ -129,6 +129,11 @@
       .media-delete { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 6px; background: rgba(0,0,0,0.55); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 0.2s, background 0.2s; }
       .media-item:hover .media-delete { opacity: 1; }
       .media-delete:hover { background: #e74c3c; }
+      .media-checkbox { position: absolute; top: 8px; left: 8px; width: 20px; height: 20px; cursor: pointer; accent-color: var(--accent); z-index: 2; }
+      .media-item.selected { outline: 2px solid var(--accent); }
+      .media-batch-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+      #batch-delete-btn { padding: 8px 16px; background: #e74c3c; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+      #batch-delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .media-thumb { width: 100%; height: 150px; object-fit: cover; background: var(--bg-secondary); }
       .media-info { padding: 12px; }
       .media-info .type { font-size: 11px; color: var(--accent); text-transform: uppercase; margin-bottom: 4px; }
@@ -324,6 +329,10 @@
           <button data-type="image">图片</button>
           <button data-type="video">视频</button>
         </div>
+        <div class="media-batch-bar">
+          <label><input type="checkbox" id="media-select-all" onchange="toggleSelectAll(this.checked)"> 全选</label>
+          <button id="batch-delete-btn" onclick="deleteSelectedMedia()" disabled>🗑️ 删除所选 (<span id="selected-count">0</span>)</button>
+        </div>
         <div class="media-grid" id="media-grid"><div class="loading">加载中...</div></div>
         <div class="pagination" id="pagination"></div>
       </div>
@@ -421,6 +430,7 @@ user3@example.com,password3"></textarea></div>
     <script>
       let currentMediaPage = 1;
       let currentMediaType = "";
+      const selectedMediaIds = new Set();
       let autoRefreshInterval;
       const API_BASE = location.origin;
       const pendingActions = new Set();
@@ -1013,6 +1023,8 @@ user3@example.com,password3"></textarea></div>
       });
       async function loadMedia() {
         try {
+          selectedMediaIds.clear();
+          updateSelectedCount();
           const url = `/dashboard/media?page=${currentMediaPage}&limit=20${currentMediaType ? "&type=" + currentMediaType : ""}`;
           const res = await api(url);
           if (!res.ok) return;
@@ -1023,6 +1035,7 @@ user3@example.com,password3"></textarea></div>
           } else {
             grid.innerHTML = data.items.map((item) => `
               <div class="media-item" onclick="window.open('${item.url}', '_blank')">
+                <input type="checkbox" class="media-checkbox" data-id="${item.id}" onclick="event.stopPropagation()" onchange="toggleMediaSelect(${item.id}, this.checked)">
                 <button class="media-delete" title="删除" onclick="event.stopPropagation(); deleteMedia(${item.id})">✕</button>
                 ${item.type === "image"
                   ? `<img class="media-thumb" src="${item.url}" onerror="this.style.background='var(--bg-secondary)'" alt="图片">`
@@ -1042,11 +1055,45 @@ user3@example.com,password3"></textarea></div>
       }
       function changePage(page) { currentMediaPage = page; loadMedia(); }
       async function deleteMedia(id) {
-        if (!confirm("确定删除这条媒体记录吗？此操作不可恢复。")) return;
         try {
           const res = await api(`/dashboard/media?id=${id}`, { method: "DELETE" });
-          if (res.ok) { toast("已删除"); loadMedia(); }
+          if (res.ok) { selectedMediaIds.delete(id); updateSelectedCount(); toast("已删除"); loadMedia(); }
           else { const d = await res.json().catch(() => ({})); toast(d.error || "删除失败", "error"); }
+        } catch (e) { toast("请求失败", "error"); }
+      }
+      function toggleMediaSelect(id, checked) {
+        if (checked) selectedMediaIds.add(id); else selectedMediaIds.delete(id);
+        const cb = document.querySelector(`#media-grid .media-checkbox[data-id="${id}"]`);
+        if (cb) cb.closest(".media-item").classList.toggle("selected", checked);
+        updateSelectedCount();
+      }
+      function toggleSelectAll(checked) {
+        document.querySelectorAll("#media-grid .media-checkbox").forEach((cb) => {
+          const id = parseInt(cb.dataset.id);
+          cb.checked = checked;
+          if (checked) selectedMediaIds.add(id); else selectedMediaIds.delete(id);
+          cb.closest(".media-item").classList.toggle("selected", checked);
+        });
+        updateSelectedCount();
+      }
+      function updateSelectedCount() {
+        const n = selectedMediaIds.size;
+        document.getElementById("selected-count").textContent = n;
+        document.getElementById("batch-delete-btn").disabled = n === 0;
+      }
+      async function deleteSelectedMedia() {
+        const ids = [...selectedMediaIds];
+        if (!ids.length) return;
+        if (!confirm(`确定删除选中的 ${ids.length} 条媒体记录吗？此操作不可恢复。`)) return;
+        try {
+          const res = await api(`/dashboard/media?ids=${ids.join(",")}`, { method: "DELETE" });
+          const d = await res.json().catch(() => ({}));
+          if (res.ok) {
+            toast(d.message || `已删除 ${ids.length} 条`);
+            selectedMediaIds.clear();
+            updateSelectedCount();
+            loadMedia();
+          } else { toast(d.error || "删除失败", "error"); }
         } catch (e) { toast("请求失败", "error"); }
       }
 
