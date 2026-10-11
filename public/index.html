@@ -927,12 +927,17 @@ user3@example.com,password3"></textarea></div>
           },
           {
             method: "POST", path: "/v1/images/generations", title: "图像生成",
-            desc: "OpenAI 兼容图像生成接口。支持 size 指定分辨率，积分不足时自动降级（2k→1k）。",
-            example: `curl ${base}/v1/images/generations \\\n  -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "jimeng-4.0",\n    "prompt": "雪山下的湖泊，风光摄影",\n    "size": "2048x2048",\n    "n": 1\n  }'`
+            desc: "OpenAI 兼容图像生成接口。通过 ratio（如 16:9）和 resolution（1k/2k）控制画面，不支持 size/width/height 参数；积分不足时自动降级（2k→1k）。",
+            example: `curl ${base}/v1/images/generations \\\n  -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "jimeng-4.0",\n    "prompt": "雪山下的湖泊，风光摄影",\n    "ratio": "1:1",\n    "resolution": "2k",\n    "n": 1\n  }'`
+          },
+          {
+            method: "POST", path: "/v1/images/compositions", title: "图像合成（图生图）",
+            desc: "基于 1–10 张参考图生成新图像。支持 JSON（images 为图片 URL 数组）或 multipart/form-data 文件上传，可用 sample_strength 控制参考强度。",
+            example: `curl ${base}/v1/images/compositions \\\n  -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "jimeng-4.0",\n    "prompt": "把图中人物放到海边日落背景中",\n    "images": ["https://example.com/photo.jpg"],\n    "ratio": "16:9",\n    "sample_strength": 0.5\n  }'`
           },
           {
             method: "POST", path: "/v1/videos/generations", title: "视频生成",
-            desc: "视频生成接口。支持分辨率（1080p→720p→480p）与时长自动降级。",
+            desc: "视频生成接口。支持分辨率（1080p→720p→480p）与时长自动降级。时长限制因模型而异：多数模型支持 5/10 秒，seedance-2.0 系列支持 4–15 秒，veo3 系列仅 8 秒，sora2 支持 4/8/12 秒。支持 multipart 上传首/尾帧图片，或 functionMode=omni_reference 全能参考模式（最多 9 图 + 3 视频）。",
             example: `curl ${base}/v1/videos/generations \\\n  -H "Authorization: Bearer YOUR_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "model": "jimeng-video-3.0",\n    "prompt": "海浪拍打礁石，电影质感",\n    "resolution": "1080p",\n    "duration": 5\n  }'`
           },
           {
@@ -941,9 +946,14 @@ user3@example.com,password3"></textarea></div>
             example: `curl ${base}/v1/models -H "Authorization: Bearer YOUR_API_KEY"`
           },
           {
-            method: "GET", path: "/token", title: "积分查询",
-            desc: "查询指定 sessionid 的剩余积分。",
-            example: `curl "${base}/token?token=YOUR_SESSIONID"`
+            method: "POST", path: "/token/points", title: "积分查询",
+            desc: "查询 Bearer Token（即梦 sessionid）对应账号的剩余积分，可一次传多个 token。",
+            example: `curl -X POST ${base}/token/points \\\n  -H "Authorization: Bearer YOUR_SESSIONID"`
+          },
+          {
+            method: "POST", path: "/token/check", title: "Token 状态检测",
+            desc: "检测指定即梦 sessionid 是否仍然有效。",
+            example: `curl -X POST ${base}/token/check \\\n  -H "Content-Type: application/json" \\\n  -d '{"token": "YOUR_SESSIONID"}'`
           },
           {
             method: "GET", path: "/ping", title: "健康检查",
