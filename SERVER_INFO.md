@@ -18,8 +18,8 @@
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
 - 镜像仓库：`ghcr.io/waninter/jimeng-api`
 - 当前镜像：`ghcr.io/waninter/jimeng-api:20261011`
-- 当前镜像 digest：`sha256:5e681d2e216873d12ba4b641f651226596472fba02a64f7ce1292ae61d556431`
-- 当前镜像对应 commit：`de84741`（CI 构建，与 `origin/main` 一致）
+- 当前镜像 digest：`sha256:27a72b1671f76e82e8792bc5e9d480f7d6a7e8a30def4811368a453c0f4574f4`
+- 当前镜像对应 commit：`4f914e1`（CI 构建，与 `origin/main` 一致）
 - imagePullSecret：`ghcr-pull`（`kubernetes.io/dockerconfigjson`，仅含 `ghcr.io`，从集群内既有 secret 复制）
 
 ## 访问地址
@@ -49,6 +49,11 @@ TLS 证书由 Let's Encrypt 正式签发，`curl` 默认校验即可通过，无
   - 通过 `kubectl -n jimeng-api set image` 滚动更新，rollout 成功
   - 验证：`/ping` 返回 `pong`；`/v1/models` 返回 21 个模型（含 `jimeng-5.0`、`jimeng-video-3.5-pro`、`jimeng-video-seedance-2.0`、`jimeng-video-veo3.1`、`jimeng-video-sora2`、`nanobanana(napro)` 等）
   - 备注：本次 push 未自动触发 push 事件构建（原因未查明），改为 `gh workflow run` 手动触发
+- 2026-10-11（第二次）：管理后台「媒体库」新增删除功能（`DELETE /dashboard/media?id=`，前端卡片悬停显示 ✕ 删除按钮）。
+  - 提交 `4f914e1` 推送至 `origin/main`，经 `gh workflow run docker-publish.yml` 手动触发构建（run 38127445610，成功）
+  - 镜像：`ghcr.io/waninter/jimeng-api:20261011`，digest：`sha256:27a72b1671f76e82e8792bc5e9d480f7d6a7e8a30def4811368a453c0f4574f4`
+  - 通过 `kubectl -n jimeng-api set image` 滚动更新，rollout 成功
+  - 验证：`/ping` 返回 `pong`；未带登录态调用 `DELETE /dashboard/media?id=1` 返回 401（路由已注册且鉴权生效）
 - 2026-09-18：在 `waninter` k3s 集群新建 `jimeng-api` namespace 并完成首次部署。
   - 镜像基于当前工作树（本地 HEAD `f892e91`，领先 `origin/main` 39 个提交，且含未提交改动）通过远程 Docker context `waninter` 以 `linux/amd64` 构建后推送 GHCR；GHCR 上此前不存在该镜像仓库。
   - 镜像：`ghcr.io/waninter/jimeng-api:prod-20260918105526`（同时推送 `latest`）
