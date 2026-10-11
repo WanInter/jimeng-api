@@ -1023,6 +1023,7 @@ user3@example.com,password3"></textarea></div>
           } else {
             grid.innerHTML = data.items.map((item) => `
               <div class="media-item" onclick="window.open('${item.url}', '_blank')">
+                <button class="media-delete" title="删除" onclick="event.stopPropagation(); deleteMedia(${item.id})">✕</button>
                 ${item.type === "image"
                   ? `<img class="media-thumb" src="${item.url}" onerror="this.style.background='var(--bg-secondary)'" alt="图片">`
                   : `<div class="media-thumb" style="display:flex;align-items:center;justify-content:center;background:var(--bg-secondary);color:var(--text-secondary);font-size:32px;">🎬</div>`}
@@ -1040,6 +1041,14 @@ user3@example.com,password3"></textarea></div>
         } catch (e) { console.error(e); }
       }
       function changePage(page) { currentMediaPage = page; loadMedia(); }
+      async function deleteMedia(id) {
+        if (!confirm("确定删除这条媒体记录吗？此操作不可恢复。")) return;
+        try {
+          const res = await api(`/dashboard/media?id=${id}`, { method: "DELETE" });
+          if (res.ok) { toast("已删除"); loadMedia(); }
+          else { const d = await res.json().catch(() => ({})); toast(d.error || "删除失败", "error"); }
+        } catch (e) { toast("请求失败", "error"); }
+      }
 
       // ===== 修改密码 =====
       function showPasswordModal() {
