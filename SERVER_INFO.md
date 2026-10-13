@@ -1,6 +1,6 @@
 # Jimeng API 集群部署信息
 
-更新时间：2026-10-12 CST
+更新时间：2026-10-13 CST
 
 ## 集群部署（当前）
 
@@ -17,9 +17,9 @@
 - PVC：`jimeng-api-data`，`5Gi`，StorageClass `waninter-local-retain`（`rancher.io/local-path`，ReclaimPolicy `Retain`），状态 `Bound`
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
 - 镜像仓库：`ghcr.io/waninter/jimeng-api`
-- 当前镜像：`ghcr.io/waninter/jimeng-api:20261011`
-- 当前镜像 digest：`sha256:cfabb3610a5faf0d2b5a0c860194a6e71df4f7b5237f8506de30e38c7faa0e15`
-- 当前镜像对应 commit：`ac48e7a`（CI 构建，与 `origin/main` 一致）
+- 当前镜像：`ghcr.io/waninter/jimeng-api:latest`（按 digest 固定）
+- 当前镜像 digest：`sha256:21c5320d66be2f6d7b9ee2ef80ff3d6459b640fc8e26662181b43891baa9b545`
+- 当前镜像对应 commit：`544b929`（CI 构建）
 - imagePullSecret：`ghcr-pull`（`kubernetes.io/dockerconfigjson`，仅含 `ghcr.io`，从集群内既有 secret 复制）
 
 ## 访问地址
@@ -28,7 +28,7 @@
 |---|---|---|
 | 管理后台 | `https://jimeng.relay.waninter.com/` | 200 OK，返回 `即梦 API 管理控制台` HTML |
 | 健康检查 | `https://jimeng.relay.waninter.com/ping` | 200 OK，返回 `pong` |
-| 初始化状态 | `https://jimeng.relay.waninter.com/dashboard/status` | 200 OK，当前 `{"setupComplete":false}` |
+| 初始化状态 | `https://jimeng.relay.waninter.com/dashboard/status` | 200 OK，当前 `{"setupComplete":true}` |
 | OpenAI 兼容图片接口 | `https://jimeng.relay.waninter.com/v1/images/generations` | 需配置即梦账号或 Bearer session 后使用 |
 | OpenAI 兼容视频接口 | `https://jimeng.relay.waninter.com/v1/videos/generations` | 需配置即梦账号或 Bearer session 后使用 |
 | OpenAI 兼容 Chat 接口 | `https://jimeng.relay.waninter.com/v1/chat/completions` | 需配置即梦账号或 Bearer session 后使用 |
@@ -37,12 +37,17 @@ TLS 证书由 Let's Encrypt 正式签发，`curl` 默认校验即可通过，无
 
 ## 管理后台初始化
 
-首次访问 `https://jimeng.relay.waninter.com/` 会要求创建管理员账号。当前 `setupComplete=false`，即尚未初始化。
+当前 `setupComplete=true`，管理员账号已完成初始化；未登录访问管理数据接口仍需认证。
 
 注意：不要把管理员密码、即梦 sessionid、API Key 写入本文档或提交到仓库。
 
 ## 本次部署记录
 
+- 2026-10-13：修复「实时日志」无 API 调用记录：对 `/v1/*` 和 `/token/*` 写入 SQLite `logs` 请求摘要（级别、方法、路由、HTTP 状态、错误码、耗时）；不记录查询参数、请求体或鉴权信息，也不记录 `/ping` 和后台轮询请求。
+  - 提交 `544b929` 推送至 `origin/main`；手动触发 GitHub Actions `docker-publish.yml`（run 38351491521，成功），确认构建源码为 `544b929`，镜像版本 `20261013`。
+  - 使用 `kubectl -n jimeng-api set image deployment/jimeng-api jimeng-api=ghcr.io/waninter/jimeng-api:latest@sha256:21c5320d66be2f6d7b9ee2ef80ff3d6459b640fc8e26662181b43891baa9b545` 更新；rollout 成功。部署前镜像为 `ghcr.io/waninter/jimeng-api:20261011@sha256:cfabb3610a5faf0d2b5a0c860194a6e71df4f7b5237f8506de30e38c7faa0e15`，可作为回退镜像。
+  - 验证：Deployment Ready `1/1`、Pod 两容器均就绪且重启 `0`；`/ping` 返回 200、`/dashboard/status` 返回 `{"setupComplete":true}`、`/v1/models` 返回 21 个模型；调用后 `logs` 从 0 条增为 1 条（`INFO GET /v1/models 200 17ms`），原有历史调用统计仍为 24；匿名访问 `/dashboard/logs` 返回 401。本地构建与回归测试通过；未使用生产管理员会话，未直接验证已登录页面展示。
+  - 本次按已记录的 `kubectl set image` 流程更新；当前 checkout 中 `scripts/deploy-k8s.sh` 不存在。
 - 2026-10-11：修复 `/v1/models` 返回过时硬编码列表的问题，改为从 `consts/common.ts` 的地区模型映射动态生成（共 21 个模型，含 `jimeng-5.0`、`jimeng-4.6`、`jimeng-video-seedance-2.0`、`jimeng-video-3.5-pro`、`veo3/veo3.1/sora2` 等，并标注 image/video 类型与适用地区）。
   - 提交 `de84741` 推送至 `origin/main`，经 GitHub Actions `docker-publish.yml`（run 38126415292，成功）构建镜像
   - 镜像：`ghcr.io/waninter/jimeng-api:20261011`，digest：`sha256:5e681d2e216873d12ba4b641f651226596472fba02a64f7ce1292ae61d556431`
