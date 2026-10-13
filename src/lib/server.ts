@@ -12,6 +12,7 @@ import FailureBody from './response/FailureBody.ts';
 import EX from './consts/exceptions.ts';
 import logger from './logger.ts';
 import config from './config.ts';
+import db from './database.ts';
 
 class Server {
 
@@ -24,6 +25,27 @@ class Server {
         // 范围请求支持
         this.app.use(koaRange);
         this.router = new KoaRouter({ prefix: config.service.urlPrefix });
+        // 只记录 API 调用摘要；不将请求体、鉴权头或查询参数写入管理后台日志。
+        this.app.use(async (ctx: any, next: Function) => {
+            const startedAt = Date.now();
+            await next();
+            const prefix = config.service.urlPrefix || '';
+            if (!config.system.requestLog ||
+                (!ctx.path.startsWith(`${prefix}/v1/`) && !ctx.path.startsWith(`${prefix}/token/`))) return;
+
+            // 部分业务错误以 HTTP 200 返回，需同时检查响应中的错误码。
+            const code = typeof ctx.body?.code === 'number' && ctx.body.code < 0 ? ctx.body.code : null;
+            const level = ctx.status >= 500 || code === EX.SYSTEM_ERROR[0] ? 'ERROR'
+                : ctx.status >= 400 || code !== null ? 'WARN' : 'INFO';
+            // 对不存在的路由也只记录通用标识，避免把误放在 URL 路径中的密钥写入数据库。
+            const route = ctx._matchedRoute || (ctx.path.startsWith(`${prefix}/v1/`) ? `${prefix}/v1/[unmatched]` : `${prefix}/token/[unmatched]`);
+            const message = `${ctx.method} ${route} ${ctx.status}${code === null ? '' : ` (code ${code})`} ${Date.now() - startedAt}ms`;
+            try {
+                db.addLog(level, message);
+            } catch (err) {
+                logger.error('Failed to save request log:', err);
+            }
+        });
         // 前置处理异常拦截
         this.app.use(async (ctx: any, next: Function) => {
             if(ctx.request.type === "application/xml" || ctx.request.type === "application/ssml+xml")
