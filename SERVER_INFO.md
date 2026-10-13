@@ -18,8 +18,8 @@
 - SQLite 数据库路径：容器内 `/app/data/jimeng.db`，由 PVC 持久化
 - 镜像仓库：`ghcr.io/waninter/jimeng-api`
 - 当前镜像：`ghcr.io/waninter/jimeng-api:latest`（按 digest 固定）
-- 当前镜像 digest：`sha256:21c5320d66be2f6d7b9ee2ef80ff3d6459b640fc8e26662181b43891baa9b545`
-- 当前镜像对应 commit：`544b929`（CI 构建）
+- 当前镜像 digest：`sha256:161b3852cdf72248fa39d273c003d697bec196f21a98385dd2fcf868b9d289fe`
+- 当前镜像对应 commit：`189bb37`（CI 构建）
 - imagePullSecret：`ghcr-pull`（`kubernetes.io/dockerconfigjson`，仅含 `ghcr.io`，从集群内既有 secret 复制）
 
 ## 访问地址
@@ -43,6 +43,10 @@ TLS 证书由 Let's Encrypt 正式签发，`curl` 默认校验即可通过，无
 
 ## 本次部署记录
 
+- 2026-10-13（第二次）：实时日志新增结构化详情（模型、配置参数、输入/输出数量、可关联的账号 ID、业务错误码、规则预估积分、实际扣费未知状态），后台支持展开详情和完整导出。旧 SQLite `logs` 表自动添加可空 `details` 列，旧记录保持可读；不记录 prompt、Token、Cookie、上传内容或原始响应。
+  - 代码提交 `189bb37` 推送至 `origin/main`；手动触发 GitHub Actions `docker-publish.yml`（run 38357887384，成功），镜像版本 `20261013`，digest `sha256:161b3852cdf72248fa39d273c003d697bec196f21a98385dd2fcf868b9d289fe`。
+  - 更新前在线备份 `/app/data/jimeng.db` 到同 PVC 的 `jimeng-pre-log-details-2026-10-13T06-41-46-554Z.db`，权限 `0600`，`quick_check=ok`，备份包含 3 条旧日志；使用 `kubectl -n jimeng-api set image deployment/jimeng-api jimeng-api=ghcr.io/waninter/jimeng-api:latest@sha256:161b3852cdf72248fa39d273c003d697bec196f21a98385dd2fcf868b9d289fe` 更新，rollout 成功。旧镜像 digest `sha256:21c5320d66be2f6d7b9ee2ef80ff3d6459b640fc8e26662181b43891baa9b545` 可供回退（新列可被旧代码忽略）。
+  - 验证：Deployment Ready `1/1`，两个容器均就绪且重启 `0`，`/ping` 返回 200、`/dashboard/status` 返回 `{"setupComplete":true}`；旧日志 ID `1–3` 保留，缺少鉴权头的视频请求返回业务码 `-2000`（未进入生成），新增 ID `4` 的 `WARN` 日志含模型 `jimeng-video-3.5-pro`、规则预估 `40`、`actualCredits=null`，不含测试 prompt。管理后台 HTML 已包含详情模板，匿名访问 `/dashboard/logs` 仍为 401；未使用生产管理员会话验证已登录页面。
 - 2026-10-13：修复「实时日志」无 API 调用记录：对 `/v1/*` 和 `/token/*` 写入 SQLite `logs` 请求摘要（级别、方法、路由、HTTP 状态、错误码、耗时）；不记录查询参数、请求体或鉴权信息，也不记录 `/ping` 和后台轮询请求。
   - 提交 `544b929` 推送至 `origin/main`；手动触发 GitHub Actions `docker-publish.yml`（run 38351491521，成功），确认构建源码为 `544b929`，镜像版本 `20261013`。
   - 使用 `kubectl -n jimeng-api set image deployment/jimeng-api jimeng-api=ghcr.io/waninter/jimeng-api:latest@sha256:21c5320d66be2f6d7b9ee2ef80ff3d6459b640fc8e26662181b43891baa9b545` 更新；rollout 成功。部署前镜像为 `ghcr.io/waninter/jimeng-api:20261011@sha256:cfabb3610a5faf0d2b5a0c860194a6e71df4f7b5237f8506de30e38c7faa0e15`，可作为回退镜像。
@@ -210,16 +214,30 @@ kubectl -n jimeng-api rollout status deployment/jimeng-api --timeout=300s
 
 ## 备份建议
 
-```bash
-kubectl -n jimeng-api exec deploy/jimeng-api -- sh -c \
-  'sqlite3 /app/data/jimeng.db ".backup /app/data/jimeng-backup.db" || cp /app/data/jimeng.db /app/data/jimeng-backup.db'
+镜像没有 `sqlite3` CLI。在线备份必须使用 SQLite 备份 API，不能直接 `cp` 正在使用 WAL 的数据库文件。本次已验证以下 `better-sqlite3` 方法：
 
-kubectl -n jimeng-api cp \
-  jimeng-api/$(kubectl -n jimeng-api get pod -l app.kubernetes.io/name=jimeng-api -o jsonpath='{.items[0].metadata.name}'):/app/data/jimeng-backup.db \
-  ./jimeng-backup-$(date +%Y%m%d%H%M%S).db
+```bash
+kubectl -n jimeng-api exec deploy/jimeng-api -c jimeng-api -- node -e '
+const Database = require("better-sqlite3"), fs = require("fs"), path = require("path");
+process.umask(0o077);
+const source = process.env.DB_PATH || "/app/data/jimeng.db";
+const dest = path.join(path.dirname(source), `jimeng-backup-${Date.now()}.db`);
+if (fs.existsSync(dest)) throw Error("backup destination exists");
+const db = new Database(source, { fileMustExist: true });
+db.backup(dest).then(() => {
+  fs.chmodSync(dest, 0o600);
+  const copy = new Database(dest, { readonly: true, fileMustExist: true });
+  if (copy.pragma("quick_check", { simple: true }) !== "ok") throw Error("backup integrity check failed");
+  console.log(path.basename(dest));
+  copy.close(); db.close();
+}).catch(err => {
+  if (fs.existsSync(dest)) fs.chmodSync(dest, 0o600);
+  console.error(err); process.exitCode = 1;
+});
+'
 ```
 
-说明：镜像未安装 `sqlite3` CLI，上述命令会 fallback 到 `cp`（未验证：本次未实际执行备份）。
+备份保存在同一个 PVC 上，包含管理员凭据和即梦账号信息，应保持 `0600` 权限；如需离线保管，须另行安排受控存储，不能上传到仓库。
 
 ## 已验证命令摘要
 
