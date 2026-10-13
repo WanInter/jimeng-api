@@ -68,6 +68,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     level TEXT NOT NULL,
     message TEXT NOT NULL,
+    details TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
   );
 
@@ -121,6 +122,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_cost_rules_type ON cost_rules(task_type);
 `);
+
+// 兼容已有数据库：旧日志没有结构化详情。
+const logColumns = db.pragma('table_info(logs)') as { name: string }[];
+if (!logColumns.some(column => column.name === 'details')) {
+  db.exec('ALTER TABLE logs ADD COLUMN details TEXT');
+}
 
 // 迁移：为已有表添加新字段（如果不存在）
 try { db.exec("ALTER TABLE jimeng_accounts ADD COLUMN proxy_url TEXT DEFAULT ''"); } catch (e) { /* 字段已存在 */ }
@@ -408,8 +415,9 @@ export function deleteMediaMany(ids: number[]): number {
 
 const MAX_LOGS = 1000;
 
-export function addLog(level: string, message: string): void {
-  db.prepare('INSERT INTO logs (level, message) VALUES (?, ?)').run(level, message);
+export function addLog(level: string, message: string, details?: Record<string, string | number | boolean | null>): void {
+  db.prepare('INSERT INTO logs (level, message, details) VALUES (?, ?, ?)')
+    .run(level, message, details && Object.keys(details).length ? JSON.stringify(details) : null);
   
   // 清理旧日志
   db.prepare(`DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT ${MAX_LOGS})`).run();
@@ -427,7 +435,8 @@ export function getLogs(level?: string, limit: number = 100) {
   query += ' ORDER BY id DESC LIMIT ?';
   params.push(limit);
   
-  return db.prepare(query).all(...params);
+  return (db.prepare(query).all(...params) as { details: string | null }[])
+    .map(row => ({ ...row, details: row.details ? JSON.parse(row.details) : null }));
 }
 
 export function clearLogs(): void {

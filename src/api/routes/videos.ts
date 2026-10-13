@@ -154,7 +154,9 @@ export default {
 
             // 积分感知选择 token
             const estimatedCost = estimateCredits('video', { model, resolution, duration });
+            request.logDetails.estimatedCredits = estimatedCost;
             const sel = await selectToken(tokens, estimatedCost, 'highest');
+            request.setLogAccount(sel.token);
 
             // 如果是 multipart/form-data，需要将字符串转换为数字
             const finalDuration = isMultiPart && typeof duration === 'string'

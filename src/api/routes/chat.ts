@@ -25,7 +25,9 @@ export default {
             const estimatedCost = isVideo
               ? estimateCredits('video', { model })
               : estimateCredits('image', { model, resolution: '2k' });
+            request.logDetails.estimatedCredits = estimatedCost;
             const sel = await selectToken(tokens, estimatedCost, isVideo ? 'highest' : 'drain-low');
+            request.setLogAccount(sel.token);
             if (stream) {
                 const stream = await createCompletionStream(messages, sel.proxyToken, model);
                 return new Response(stream, {

@@ -175,7 +175,7 @@ A built-in web admin (backed by SQLite) is served at the root path. After the se
 - **Account Management**: Add / check / delete Jimeng accounts (sessionid), with automatic region-prefix handling (us-/hk-/jp-/sg-).
 - **API Key Management**: Generate, enable/disable, and delete API Keys.
 - **Statistics**: View call counts and per-key usage.
-- **Real-time Logs**: Inspect and clear runtime logs by level.
+- **Real-time Logs**: Filter, expand, export, and clear API request summaries with model, safe request/default parameters (which may be adjusted for the selected model), input/output counts, account ID when available, and rule-based estimated credits. Actual per-request credits remain unknown when they cannot be reliably attributed; estimates are not charges. The structured dashboard details do not store prompts, tokens, cookies, uploads, or raw responses. Existing log entries are not backfilled.
 - **Media Library**: Browse generated images and videos with pagination.
 
 > The dashboard data (admin credentials, sessions, API keys) is stored in the local `data/` directory, which is excluded from version control.

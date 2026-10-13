@@ -110,14 +110,26 @@
       .logs-toolbar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
       .logs-toolbar select, .logs-toolbar button { padding: 8px 16px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; font-size: 14px; cursor: pointer; }
       .log-container { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; max-height: 500px; overflow-y: auto; }
-      .log-entry { padding: 10px 16px; border-bottom: 1px solid var(--border); font-family: "Monaco","Consolas",monospace; font-size: 13px; display: flex; gap: 12px; }
+      .log-entry { padding: 12px 16px; border-bottom: 1px solid var(--border); font-family: "Monaco","Consolas",monospace; font-size: 13px; }
       .log-entry:last-child { border-bottom: none; }
+      .log-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; }
       .log-time { color: var(--text-secondary); min-width: 160px; }
       .log-level { min-width: 50px; font-weight: 600; }
       .log-level.INFO { color: var(--success); }
       .log-level.WARN { color: var(--warning); }
       .log-level.ERROR { color: var(--error); }
-      .log-message { flex: 1; word-break: break-all; }
+      .log-message { flex: 1 1 260px; overflow-wrap: anywhere; }
+      .log-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+      .log-chip { display: inline-block; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 11px; }
+      .log-chip.cost { border-color: rgba(124,58,237,0.45); color: #c4b5fd; }
+      .log-details { margin-top: 8px; }
+      .log-details summary { width: fit-content; cursor: pointer; color: #93c5fd; font-size: 12px; }
+      .log-details summary:hover { color: var(--text-primary); }
+      .log-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 16px; margin-top: 10px; padding: 12px; background: var(--bg-secondary); border-radius: 6px; }
+      .log-detail-grid div { min-width: 0; }
+      .log-detail-grid dt { margin-bottom: 3px; color: var(--text-secondary); font-size: 11px; }
+      .log-detail-grid dd { margin: 0; overflow-wrap: anywhere; }
+      @media (max-width: 680px) { .log-time { min-width: 0; } .log-message { flex-basis: 100%; } }
 
       /* 媒体库 */
       .media-filters { display: flex; gap: 10px; margin-bottom: 20px; }
@@ -432,6 +444,7 @@ user3@example.com,password3"></textarea></div>
       let currentMediaType = "";
       const selectedMediaIds = new Set();
       let autoRefreshInterval;
+      let loadedLogs = [];
       const API_BASE = location.origin;
       const pendingActions = new Set();
 
@@ -981,19 +994,62 @@ user3@example.com,password3"></textarea></div>
           </div>`).join("");
       }
       // ===== 日志 =====
+      const logDetailLabels = {
+        result: "处理结果", model: "模型", category: "类型", accountId: "即梦账号 ID",
+        requestedResolution: "配置分辨率（含默认）", requestedRatio: "配置比例（含默认）", requestedDurationSeconds: "配置时长（含默认）",
+        functionMode: "生成模式", responseFormat: "返回格式", stream: "流式请求",
+        inputImageCount: "输入图片数", inputVideoCount: "输入视频数", messageCount: "消息数",
+        promptLength: "提示词字符数", outputCount: "输出数", estimatedCredits: "规则预估积分",
+        actualCredits: "实际扣费", errorCode: "业务错误码",
+      };
+      function formatLogDetail(key, value) {
+        if (key === "actualCredits" && value == null) return "未知（未采集到可信实扣）";
+        if (key === "estimatedCredits") return `${value} 积分（规则预估，非实扣）`;
+        if (key === "requestedDurationSeconds") return `${value} 秒`;
+        if (key === "stream") return value ? "是" : "否";
+        if (key === "result") return {
+          failed: "失败", completed: "请求已完成", stream_started: "已建立流，最终结果未确认",
+          response_sent: "已返回响应，任务结果未确认",
+        }[value] || "未知";
+        if (key === "category") return { image: "图片", video: "视频", unknown: "未知" }[value] || "未知";
+        if (key === "functionMode") return { first_last_frames: "首尾帧", omni_reference: "全能参考" }[value] || "未知";
+        return typeof value === "string" || typeof value === "number" ? String(value) : "未知";
+      }
+      function logDetailRows(details) {
+        if (!details || typeof details !== "object") return [];
+        return Object.entries(logDetailLabels)
+          .filter(([key]) => Object.prototype.hasOwnProperty.call(details, key))
+          .map(([key, label]) => [label, formatLogDetail(key, details[key])]);
+      }
       async function loadLogs() {
         const level = document.getElementById("log-level").value;
         try {
           const res = await api(`/dashboard/logs?level=${level}&limit=200`);
           if (!res.ok) return;
           const logs = await res.json();
+          loadedLogs = logs;
           const container = document.getElementById("log-container");
-          container.innerHTML = logs.map((log) => `
+          const expanded = new Set([...container.querySelectorAll(".log-details[open]")].map(el => Number(el.dataset.logId)));
+          container.innerHTML = logs.map((log) => {
+            const details = log.details || {};
+            const rows = logDetailRows(details);
+            const levelClass = ["INFO", "WARN", "ERROR"].includes(log.level) ? log.level : "";
+            return `
             <div class="log-entry">
-              <span class="log-time">${escapeHtml(log.created_at)}</span>
-              <span class="log-level ${log.level}">${log.level}</span>
-              <span class="log-message">${escapeHtml(log.message)}</span>
-            </div>`).join("") || '<div class="loading">暂无日志</div>';
+              <div class="log-head">
+                <span class="log-time">${escapeHtml(log.created_at)}</span>
+                <span class="log-level ${levelClass}">${escapeHtml(log.level)}</span>
+                <span class="log-message">${escapeHtml(log.message)}</span>
+              </div>
+              ${details.model || details.estimatedCredits != null ? `<div class="log-highlights">
+                ${details.model ? `<span class="log-chip">${escapeHtml(details.model)}</span>` : ""}
+                ${details.estimatedCredits != null ? `<span class="log-chip cost">预估 ${escapeHtml(details.estimatedCredits)} 积分 · 非实扣</span>` : ""}
+              </div>` : ""}
+              ${rows.length ? `<details class="log-details" data-log-id="${Number(log.id)}" ${expanded.has(Number(log.id)) ? "open" : ""}><summary>查看详情 · ${rows.length} 项</summary>
+                <dl class="log-detail-grid">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>
+              </details>` : ""}
+            </div>`;
+          }).join("") || '<div class="loading">暂无日志</div>';
         } catch (e) { console.error(e); }
       }
       async function clearLogs() {
@@ -1002,7 +1058,10 @@ user3@example.com,password3"></textarea></div>
         loadLogs();
       }
       function exportLogs() {
-        const text = document.getElementById("log-container").innerText;
+        const text = loadedLogs.map((log) => [
+          `[${log.created_at}][${log.level}] ${log.message}`,
+          ...logDetailRows(log.details).map(([label, value]) => `  ${label}: ${value}`),
+        ].join("\n")).join("\n\n");
         const blob = new Blob([text], { type: "text/plain" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");

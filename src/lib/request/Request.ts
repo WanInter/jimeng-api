@@ -4,6 +4,7 @@ import APIException from '@/lib/exceptions/APIException.ts';
 import EX from '@/api/consts/exceptions.ts';
 import logger from '@/lib/logger.ts';
 import util from '@/lib/util.ts';
+import db from '@/lib/database.ts';
 
 export interface RequestOptions {
     time?: number;
@@ -35,6 +36,8 @@ export default class Request {
     remoteIP: string | null;
     /** 请求接受时间戳（毫秒） */
     time: number;
+    /** 仅用于后台日志的内部统计字段（不含 Token） */
+    logDetails: { estimatedCredits?: number; accountId?: number };
 
     constructor(ctx, options: RequestOptions = {}) {
         const { time } = options;
@@ -50,6 +53,15 @@ export default class Request {
         this.files = ctx.request.files || {};
         this.remoteIP = this.headers["X-Real-IP"] || this.headers["x-real-ip"] || this.headers["X-Forwarded-For"] || this.headers["x-forwarded-for"] || ctx.ip || null;
         this.time = Number(_.defaultTo(time, util.timestamp()));
+        this.logDetails = ctx.state?.requestLogDetails || {};
+        if (ctx.state) ctx.state.requestLogDetails = this.logDetails;
+    }
+
+    setLogAccount(token: string) {
+        try {
+            const accountId = db.getAccountByToken(token)?.id;
+            if (accountId) this.logDetails.accountId = accountId;
+        } catch { /* 日志补充字段失败不应影响 API 请求 */ }
     }
 
     validate(key: string, fn?: Function, message?: string) {

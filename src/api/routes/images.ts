@@ -46,7 +46,9 @@ export default {
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
       const estimatedCost = estimateCredits('image', { model: finalModel, resolution });
+      request.logDetails.estimatedCredits = estimatedCost;
       const sel = await selectToken(tokens, estimatedCost, 'drain-low');
+      request.setLogAccount(sel.token);
 
       const responseFormat = _.defaultTo(response_format, "url");
       const imageUrls = await generateImages(finalModel, prompt, {
@@ -165,7 +167,9 @@ export default {
       } = request.body;
       const finalModel = _.defaultTo(model, DEFAULT_IMAGE_MODEL);
       const estimatedCost = estimateCredits('image', { model: finalModel, resolution });
+      request.logDetails.estimatedCredits = estimatedCost;
       const sel = await selectToken(tokens, estimatedCost, 'drain-low');
+      request.setLogAccount(sel.token);
 
       // 如果是 multipart/form-data，需要将字符串转换为数字和布尔值
       const finalSampleStrength = isMultiPart && typeof sampleStrength === 'string'

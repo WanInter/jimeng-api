@@ -13,6 +13,89 @@ import EX from './consts/exceptions.ts';
 import logger from './logger.ts';
 import config from './config.ts';
 import db from './database.ts';
+import {
+    DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL,
+    IMAGE_MODEL_MAP, IMAGE_MODEL_MAP_US, IMAGE_MODEL_MAP_ASIA,
+    VIDEO_MODEL_MAP, VIDEO_MODEL_MAP_US, VIDEO_MODEL_MAP_ASIA,
+    RESOLUTION_OPTIONS,
+} from '@/api/consts/common.ts';
+
+const knownModels = new Set([
+    ...Object.keys(IMAGE_MODEL_MAP), ...Object.keys(IMAGE_MODEL_MAP_US), ...Object.keys(IMAGE_MODEL_MAP_ASIA),
+    ...Object.keys(VIDEO_MODEL_MAP), ...Object.keys(VIDEO_MODEL_MAP_US), ...Object.keys(VIDEO_MODEL_MAP_ASIA),
+]);
+const knownResolutions = new Set(['1k', '2k', '4k', '480p', '720p', '1080p']);
+const knownRatios = new Set(Object.keys(RESOLUTION_OPTIONS['1k']));
+
+// 仅提取经过白名单验证的标量和计数，绝不持久化原始 body、URL、headers 或响应内容。
+function getRequestLogDetails(ctx: any, route: string, code: number | null) {
+    const isImage = route === '/v1/images/generations' || route === '/v1/images/compositions';
+    const isVideo = route === '/v1/videos/generations';
+    const isChat = route === '/v1/chat/completions';
+    if (!isImage && !isVideo && !isChat) return null;
+
+    const body = ctx.request.body || {};
+    const rawModel = body.model;
+    const defaultModel = isVideo ? DEFAULT_VIDEO_MODEL : DEFAULT_IMAGE_MODEL;
+    const model = rawModel === undefined ? defaultModel : typeof rawModel === 'string' ? rawModel : null;
+    const modelParts = model?.split(':') || [];
+    const safeModel = modelParts.length <= 2 && knownModels.has(modelParts[0]) &&
+        (modelParts.length === 1 || /^\d{2,5}x\d{2,5}$/.test(modelParts[1])) ? model : null;
+    let category: 'image' | 'video' | 'unknown' = isVideo ? 'video' : 'image';
+    if (isChat) category = !safeModel ? 'unknown' : safeModel.startsWith('jimeng-video') ? 'video' : 'image';
+    const details: Record<string, string | number | boolean | null> = {
+        category,
+        actualCredits: null,
+        result: code !== null || ctx.status >= 400 ? 'failed'
+            : isChat && body.stream ? 'stream_started' : isChat ? 'response_sent' : 'completed',
+    };
+    if (safeModel) details.model = safeModel;
+    if (code !== null) details.errorCode = code;
+    const resolution = body.resolution === undefined ? (category === 'video' ? '720p' : '2k') : body.resolution;
+    if (knownResolutions.has(resolution)) details.requestedResolution = resolution;
+    const ratio = body.ratio === undefined ? '1:1' : body.ratio;
+    if (knownRatios.has(ratio)) details.requestedRatio = ratio;
+    if (category === 'video') {
+        const duration = body.duration === undefined ? 5 : Number(body.duration);
+        if (Number.isInteger(duration) && duration >= 1 && duration <= 15) details.requestedDurationSeconds = duration;
+    }
+    if (isVideo && ['first_last_frames', 'omni_reference'].includes(body.functionMode || 'first_last_frames')) {
+        details.functionMode = body.functionMode || 'first_last_frames';
+        const fieldNames = new Set([...Object.keys(body), ...Object.keys(ctx.request.files || {})]);
+        const paths = Array.isArray(body.filePaths) && body.filePaths.length > 0 ? body.filePaths
+            : Array.isArray(body.file_paths) ? body.file_paths : [];
+        details.inputImageCount = [...fieldNames].filter(name => /^image_file(_\d+)?$/.test(name)).length + paths.length;
+        details.inputVideoCount = [...fieldNames].filter(name => /^video_file(_\d+)?$/.test(name)).length;
+    }
+    if (isChat) {
+        if (Array.isArray(body.messages)) details.messageCount = body.messages.length;
+        details.stream = Boolean(body.stream);
+    } else {
+        if (typeof body.prompt === 'string') details.promptLength = body.prompt.length;
+        const responseFormat = body.response_format || 'url';
+        if (responseFormat === 'url' || responseFormat === 'b64_json') details.responseFormat = responseFormat;
+        if (route === '/v1/images/compositions') {
+            const input = ctx.request.files?.images;
+            details.inputImageCount = Array.isArray(body.images) ? body.images.length
+                : Array.isArray(input) ? input.length : input ? 1 : 0;
+        }
+    }
+
+    const reported = ctx.state.requestLogDetails || {};
+    if (Number.isInteger(reported.accountId) && reported.accountId > 0) details.accountId = reported.accountId;
+    if (Array.isArray(ctx.body?.data)) details.outputCount = ctx.body.data.length;
+    // 规则预估并非上游实际扣费；校验失败的请求同样只表示“如果执行”的预计消耗。
+    if (Number.isFinite(reported.estimatedCredits)) {
+        details.estimatedCredits = reported.estimatedCredits;
+    } else if (safeModel) {
+        details.estimatedCredits = db.queryCostRule(category, {
+            model: safeModel,
+            resolution: details.requestedResolution as string,
+            duration: details.requestedDurationSeconds as number,
+        });
+    }
+    return details;
+}
 
 class Server {
 
@@ -40,8 +123,15 @@ class Server {
             // 对不存在的路由也只记录通用标识，避免把误放在 URL 路径中的密钥写入数据库。
             const route = ctx._matchedRoute || (ctx.path.startsWith(`${prefix}/v1/`) ? `${prefix}/v1/[unmatched]` : `${prefix}/token/[unmatched]`);
             const message = `${ctx.method} ${route} ${ctx.status}${code === null ? '' : ` (code ${code})`} ${Date.now() - startedAt}ms`;
+            let details;
             try {
-                db.addLog(level, message);
+                const relativeRoute = route.startsWith(prefix) ? route.slice(prefix.length) : route;
+                details = getRequestLogDetails(ctx, relativeRoute, code) || undefined;
+            } catch (err) {
+                logger.warn('Failed to collect request log details:', err);
+            }
+            try {
+                db.addLog(level, message, details);
             } catch (err) {
                 logger.error('Failed to save request log:', err);
             }
